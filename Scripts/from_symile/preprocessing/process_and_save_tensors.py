@@ -15,25 +15,27 @@ import wfdb
 
 from args import parse_process_and_save_tensors
 
-def process_and_save_tensors(args, split):
+def process_and_save_tensors(args):
     """
     Processes the data from df and saves the resulting tensors to the specified
     directory.
     """
+    split = args.split
 
     save_dir = args.data_dir / split
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    cxr_list = np.load(args.data_dir / split / f"cxr_{split}.npy")
-    ecg_list = [np.load(args.data_dir / split / f"ecg_{split}.npy")]
-    labs_percentiles_list = [np.load(args.data_dir / split / f"labs_percentiles_{split}.npy")]
-    labs_missingness_list = [np.load(args.data_dir / split / f"labs_missingness_{split}.npy")]
-    hadm_id_list = [np.load(args.data_dir / split / f"hadm_id_{split}.npy")]
+    print("Loading numpy arrays...")
+    cxr_npy = np.load(args.data_dir / split / f"cxr_{split}.npy")
+    ecg_npy = np.load(args.data_dir / split / f"ecg_{split}.npy")
+    labs_percentiles_npy = np.load(args.data_dir / split / f"labs_percentiles_{split}.npy")
+    labs_missingness_npy = np.load(args.data_dir / split / f"labs_missingness_{split}.npy")
+    hadm_id_npy = np.load(args.data_dir / split / f"hadm_id_{split}.npy")
 
     if split in ["val_retrieval", "test"]:
-        label_hadm_id_list = [np.load(args.data_dir / split / f"hadm_id_{split}.npy")]
-        label_list = [np.load(args.data_dir / split / f"hadm_id_{split}.npy")]
+        label_hadm_id_npy = np.load(args.data_dir / split / f"hadm_id_{split}.npy")
+        label_npy = np.load(args.data_dir / split / f"hadm_id_{split}.npy")
 
     # for _, row in tqdm(df.iterrows(), total=df.shape[0]):
     #     cxr = get_cxr(args, row["cxr_path"], split)
@@ -50,12 +52,14 @@ def process_and_save_tensors(args, split):
     #         label_hadm_id_list.append(row["label_hadm_id"])
     #         label_list.append(row["label"])
 
-    cxr_tensor = torch.from_numpy(cxr_list) # (n, 3, cxr_crop, cxr_crop)
-    ecg_tensor = torch.from_numpy(ecg_list) # (n, 1, 5000, 12)
-    labs_percentiles_tensor = torch.from_numpy(labs_percentiles_list) # (n, 50)
-    labs_missingness_tensor = torch.from_numpy(labs_missingness_list) # (n, 50)
-    hadm_id_tensor = torch.from_numpy(hadm_id_list) # (n,)
+    print("Converting to tensors...")
+    cxr_tensor = torch.from_numpy(cxr_npy) # (n, 3, cxr_crop, cxr_crop)
+    ecg_tensor = torch.from_numpy(ecg_npy) # (n, 1, 5000, 12)
+    labs_percentiles_tensor = torch.from_numpy(labs_percentiles_npy) # (n, 50)
+    labs_missingness_tensor = torch.from_numpy(labs_missingness_npy) # (n, 50)
+    hadm_id_tensor = torch.from_numpy(hadm_id_npy) # (n,)
 
+    print("Saving tensors...")
     torch.save(cxr_tensor, save_dir / f"cxr_{split}.pt")
     torch.save(ecg_tensor, save_dir / f"ecg_{split}.pt")
     torch.save(labs_percentiles_tensor, save_dir / f"labs_percentiles_{split}.pt")
@@ -63,10 +67,10 @@ def process_and_save_tensors(args, split):
     torch.save(hadm_id_tensor, save_dir / f"hadm_id_{split}.pt")
 
     if split in ["val_retrieval", "test"]:
-        label_hadm_id_tensor = torch.from_numpy(label_hadm_id_list)
+        label_hadm_id_tensor = torch.from_numpy(label_hadm_id_npy)
         torch.save(label_hadm_id_tensor, save_dir / f"label_hadm_id_{split}.pt")
 
-        label_tensor = torch.from_numpy(label_list)
+        label_tensor = torch.from_numpy(label_npy)
         torch.save(label_tensor, save_dir / f"label_{split}.pt")
 
 
@@ -75,8 +79,8 @@ if __name__ == '__main__':
 
     args = parse_process_and_save_tensors()
 
-    print("Saving train tensors...")
-    process_and_save_tensors(args, "train")
+    print(f"Saving {args.split} tensors...")
+    process_and_save_tensors(args)
 
     # print("Saving val tensors...")
     # process_and_save_tensors(args, val_df, "val")

@@ -19,45 +19,45 @@ def str_to_bool(arg):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-def parse_process_mimic_data():
-    parser = argparse.ArgumentParser()
+# def parse_process_mimic_data():
+#     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--mimiciv_hosp_dir", type=Path,
-                        help="Path to MIMIC-IV hospital module directory, which \
-                        must include the files patients.csv.gz, admissions.csv.gz, \
-                            and labevents.csv.gz.")
-    parser.add_argument("--cxr_data_dir", type=Path,
-                        help="Directory with MIMIC CXR data, which must include the \
-                        files mimic-cxr-2.0.0-metadata.csv.gz and mimic-cxr-2.0.0-chexpert.csv.gz.")
-    parser.add_argument("--ecg_data_dir", type=Path,
-                        help="Directory with MIMIC ECG data, which must include the \
-                        file record_list.csv.")
-    parser.add_argument("--save_dir", type=Path,
-                        help="Where to save DataFrame with processed data.")
+#     parser.add_argument("--mimiciv_hosp_dir", type=Path,
+#                         help="Path to MIMIC-IV hospital module directory, which \
+#                         must include the files patients.csv.gz, admissions.csv.gz, \
+#                             and labevents.csv.gz.")
+#     parser.add_argument("--cxr_data_dir", type=Path,
+#                         help="Directory with MIMIC CXR data, which must include the \
+#                         files mimic-cxr-2.0.0-metadata.csv.gz and mimic-cxr-2.0.0-chexpert.csv.gz.")
+#     parser.add_argument("--ecg_data_dir", type=Path,
+#                         help="Directory with MIMIC ECG data, which must include the \
+#                         file record_list.csv.")
+#     parser.add_argument("--save_dir", type=Path,
+#                         help="Where to save DataFrame with processed data.")
 
-    return parser.parse_args()
+#     return parser.parse_args()
 
 
-def parse_create_dataset_splits():
-    parser = argparse.ArgumentParser()
+# def parse_create_dataset_splits():
+#     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset_path", type=Path,
-                        help="Path to csv file with full dataset.")
-    parser.add_argument("--save_dir", type=Path,
-                        help="Where to save data.")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--use_seed", type=str_to_bool, default=True,
-                        help="Whether to use a seed for reproducibility.")
+#     parser.add_argument("--dataset_path", type=Path,
+#                         help="Path to csv file with full dataset.")
+#     parser.add_argument("--save_dir", type=Path,
+#                         help="Where to save data.")
+#     parser.add_argument("--seed", type=int, default=0)
+#     parser.add_argument("--use_seed", type=str_to_bool, default=True,
+#                         help="Whether to use a seed for reproducibility.")
 
-    parser.add_argument("--train_n", type=int,
-                        help="Number of samples in train set.")
-    parser.add_argument("--val_n", type=int,
-                        help="Number of samples in val set.")
-    parser.add_argument("--candidate_n", type=int,
-                        help="Number of candidates for each test sample \
-                              (candidate_n - 1 negative candidates for each).")
+#     parser.add_argument("--train_n", type=int,
+#                         help="Number of samples in train set.")
+#     parser.add_argument("--val_n", type=int,
+#                         help="Number of samples in val set.")
+#     parser.add_argument("--candidate_n", type=int,
+#                         help="Number of candidates for each test sample \
+#                               (candidate_n - 1 negative candidates for each).")
 
-    return parser.parse_args()
+#     return parser.parse_args()
 
 
 def parse_process_and_save_tensors():

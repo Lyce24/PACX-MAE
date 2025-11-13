@@ -1,0 +1,11 @@
+/requirements_*
+/environment*
+
+/draft
+/checkpoints
+/data
+/logs
+/mae-cxr
+/wandb
+
+/__pycache__

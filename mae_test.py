@@ -126,11 +126,11 @@ class CheXpertDataModule(pl.LightningDataModule):
             pin_memory=True
         )
 
-batch_size = 256
+batch_size = 128
 data_module = CheXpertDataModule(
     train_csv="./data/train_split.csv",
     val_csv="./data/val_split.csv",
-    root_dir="/users/yliu802/.cache/kagglehub/datasets/ashery/chexpert/versions/1",
+    root_dir="../../scratch/kagglehub_cache/kagglehub/datasets/ashery/chexpert/versions/1",
     batch_size=batch_size,
     num_workers=12,
     image_size=224
@@ -324,4 +324,4 @@ trainer = pl.Trainer(
 )
 
 trainer.fit(model, datamodule=data_module)
-trainer.save_checkpoint("./checkpoints/mae_cxr_base.ckpt")
+trainer.save_checkpoint("../../scratch/model_checkpoints/mae/mae_cxr_base_2_gpu.ckpt")

@@ -21,6 +21,7 @@ class CheXpertDataModule(pl.LightningDataModule):
         self.val_df = pd.read_csv(val_csv)
 
         self.task = task
+        
         if self.task != "MAE":
             self.test_csv = test_csv
             self.test_df = pd.read_csv(test_csv)

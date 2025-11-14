@@ -57,6 +57,6 @@ class CXRModel(nn.Module):
 
     def forward(self, x):
         # For timm ViT with num_classes=0, backbone(x) returns pooled features [B, C]
-        feats = self.backbone(x)
+        feats = self.backbone.forward_features(x)
         logits = self.head(feats)
         return logits

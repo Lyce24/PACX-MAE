@@ -1,9 +1,9 @@
 import torch
 from typing import Dict
-from timm.models.layers import trunc_normal_
+from timm.layers import trunc_normal_
 
 # from mae import mae_vit_base_patch16_dec512d8b, mae_vit_large_patch16_dec512d8b, mae_vit_huge_patch14_dec512d8b
-from vit import vit_base_patch16, vit_large_patch16, vit_huge_patch14
+from .vit import vit_base_patch16, vit_large_patch16, vit_huge_patch14
 
 def interpolate_pos_embed(model, checkpoint_model):
     if 'pos_embed' in checkpoint_model:

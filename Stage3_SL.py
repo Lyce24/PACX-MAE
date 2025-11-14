@@ -4,6 +4,9 @@ import torch
 from Modules.data_modules import CheXpertDataModule
 
 import argparse
+from Scripts.MAE.mae_to_vit import get_vit_from_mae
+
+from Modules.lightning_modules import ClassificationLightningModule
 
 def main(args):
     data_module = CheXpertDataModule(
@@ -26,55 +29,42 @@ def main(args):
     print(f"Number of validation batches: {len(val_loader)}")
     print(f"Number of test batches: {len(test_loader)}")
 
-    # model = MAELightningModule(
-    #     size="base",
-    #     mask_ratio=args.mask_ratio,
-    #     lr=args.lr,
-    #     weight_decay=args.weight_decay,
-    #     betas=(0.9, 0.95),
-    #     warmup_epochs=args.warmup_epochs,
-    #     log_images_every_n_epochs=args.log_images_every_n_epochs,
-    #     log_max_images=args.log_max_images,
-    # )
+    ckpt = torch.load(args.ckpt_path, map_location="cpu", weights_only=False)
+    vit_model = get_vit_from_mae(ckpt, global_pool=False)
 
-    # # ---------- Test the Model ----------
-    # model.eval()
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model.to(device)
+    model = ClassificationLightningModule(
+        model=vit_model,
+        num_classes=1,
+        model_weights=None,
+        freeze_backbone=True,
+        pos_weight=None,
+        lr=1e-3,
+        weight_decay=0.05,
+        warmup_epochs=10,
+        class_names=["COVID"]
+    )
 
-    # batch = next(iter(train_loader))  # CheXpertDataModule returns only images
-    # imgs = batch.to(device)           # [B, 3, 224, 224]
+    # ---------- Test the Model ----------
+    model.eval()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
 
-    # with torch.no_grad():
-    #     out = model(imgs)
+    batch = next(iter(train_loader))  # CheXpertDataModule returns only images
+    imgs, labels = batch
+    imgs = imgs.to(device)
 
-    # print("Forward output type:", type(out))
-    # if isinstance(out, tuple) or isinstance(out, list):
-    #     print("Tuple length:", len(out))
-    #     for i, t in enumerate(out):
-    #         if torch.is_tensor(t):
-    #             print(f"  out[{i}] shape:", t.shape)
-    # else:
-    #     if torch.is_tensor(out):
-    #         print("Output shape:", out.shape)
+    with torch.no_grad():
+        out = model(imgs)
 
-    # logger = WandbLogger(project=args.wandb_project)
-
-    # trainer = pl.Trainer(
-    #     max_epochs=args.max_epochs,
-    #     precision="16-mixed",   # AMP
-    #     logger=logger,
-    #     gradient_clip_val=0.0,
-    #     deterministic=False,
-    #     check_val_every_n_epoch=1,
-    #     accelerator="gpu",
-    #     devices=args.devices,
-    #     num_nodes=args.num_nodes,
-    #     strategy="auto",
-    # )
-
-    # trainer.fit(model, datamodule=data_module)
-    # trainer.save_checkpoint(args.checkpoint_path)
+    print("Forward output type:", type(out))
+    if isinstance(out, tuple) or isinstance(out, list):
+        print("Tuple length:", len(out))
+        for i, t in enumerate(out):
+            if torch.is_tensor(t):
+                print(f"  out[{i}] shape:", t.shape)
+    else:
+        if torch.is_tensor(out):
+            print("Output shape:", out.shape)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -82,10 +72,12 @@ if __name__ == "__main__":
     parser.add_argument("--train_csv", type=str, default="./data/covid_train_split.csv")
     parser.add_argument("--val_csv", type=str, default="./data/covid_val_split.csv")
     parser.add_argument("--test_csv", type=str, default="./data/covid_test_split.csv")
-    parser.add_argument("--root_dir", type=str, default="../../../.cache/kagglehub/datasets/andyczhao/covidx-cxr2/versions/9")
+    parser.add_argument("--root_dir", type=str, default="../../.cache/kagglehub/datasets/andyczhao/covidx-cxr2/versions/9")
     parser.add_argument("--num_workers", type=int, default=12)
     parser.add_argument("--image_size", type=int, default=224)
     parser.add_argument("--task", type=str, default="COVID")
+    parser.add_argument("--ckpt_path", type=str, default="../../scratch/model_checkpoints/mae/mae_cxr_final.ckpt")
+
     args = parser.parse_args()
     
     main(args)

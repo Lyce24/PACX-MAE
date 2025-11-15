@@ -89,12 +89,9 @@ class CXREncoder(nn.Module):
 
     def apply_cxr_aug(self, x, transform=self.transform):
         N = x.shape[0]
-        C = x.shape[1]
-        H = x.shape[2]
-        W = x.shape[3]
 
         # apply SimSiam augmentation per image tensor
-        view = torch.empty(N, C, H, W)
+        view = torch.empty_like(x)
         for i in range(N):
             aug_x = transform(x[i])
             view[i] = aug_x
@@ -118,52 +115,52 @@ class CXREncoder(nn.Module):
         z2 = self.proj(feats2)
         return self.layer_norm(z1), self.layer_norm(z2)      # (B, d)
 
-# Optimal ECG augmentation combination from 3KG paper
-class RotateTransform:
-    def __init__(self, angle=45):
-        self.angle = angle
+# Previous ECG augmentation combination from 3KG paper
+# class RotateTransform:
+#     def __init__(self, angle=45):
+#         self.angle = angle
     
-    def __call__(self, x):
-        # x[i] = (1, 5000, 12)
-        angle_rad = math.radians(self.angle)
-        theta = torch.tensor([
-            [math.cos(angle_rad), -math.sin(angle_rad), 0],
-            [math.sin(angle_rad), math.cos(angle_rad), 0]
-        ], dtype=torch.float32, device=x.device)
-        x = x.unsqueeze(0)  # add batch dim for grid_sample
-        grid = torch.nn.functional.affine_grid(theta.unsqueeze(0), x.size(), align_corners=False)
-        x_rot = torch.nn.functional.grid_sample(x, grid, align_corners=False, padding_mode='border')
-        return x_rot.squeeze(0) # return to original dim
+#     def __call__(self, x):
+#         # x[i] = (1, 5000, 12)
+#         angle_rad = math.radians(self.angle)
+#         theta = torch.tensor([
+#             [math.cos(angle_rad), -math.sin(angle_rad), 0],
+#             [math.sin(angle_rad), math.cos(angle_rad), 0]
+#         ], dtype=torch.float32, device=x.device)
+#         x = x.unsqueeze(0)  # add batch dim for grid_sample
+#         grid = torch.nn.functional.affine_grid(theta.unsqueeze(0), x.size(), align_corners=False)
+#         x_rot = torch.nn.functional.grid_sample(x, grid, align_corners=False, padding_mode='border')
+#         return x_rot.squeeze(0) # return to original dim
 
-class ScaleTimeTransform:
-    def __init__(self, scale=1.5, orig_time=5000):
-        self.scale = scale
-        self.orig_time = orig_time
+# class ScaleTimeTransform:
+#     def __init__(self, scale=1.5, orig_time=5000):
+#         self.scale = scale
+#         self.orig_time = orig_time
     
-    def __call__(self, x):
-        # x shape: (1, 5000, 12)
-        n, t, l = x.shape
-        new_t = int(t * self.scale)
-        x_scaled = torch.nn.functional.interpolate(x.unsqueeze(0), size=(new_t, l), mode='bilinear', align_corners=False)
-        x_scaled = x_scaled.squeeze(0)
-        if new_t > self.orig_time:
-            x_scaled = x_scaled[:, :self.orig_time, :]
-        else:
-            pad_amount = self.orig_time - new_t
-            x_scaled = torch.nn.functional.pad(x_scaled, (0, 0, 0, pad_amount))
-        return x_scaled
+#     def __call__(self, x):
+#         # x shape: (1, 5000, 12)
+#         n, t, l = x.shape
+#         new_t = int(t * self.scale)
+#         x_scaled = torch.nn.functional.interpolate(x.unsqueeze(0), size=(new_t, l), mode='bilinear', align_corners=False)
+#         x_scaled = x_scaled.squeeze(0)
+#         if new_t > self.orig_time:
+#             x_scaled = x_scaled[:, :self.orig_time, :]
+#         else:
+#             pad_amount = self.orig_time - new_t
+#             x_scaled = torch.nn.functional.pad(x_scaled, (0, 0, 0, pad_amount))
+#         return x_scaled
 
-class TimeMaskTransform:
-    def __init__(self, max_mask_size=100):
-        self.max_mask_size = max_mask_size
+# class TimeMaskTransform:
+#     def __init__(self, max_mask_size=100):
+#         self.max_mask_size = max_mask_size
     
-    def __call__(self, x):
-        n, t, l = x.shape
-        x_masked = x.clone()
-        mask_size = random.randint(1, self.max_mask_size)
-        start = random.randint(0, t - mask_size)
-        x_masked[:, start:start+mask_size, :] = 0
-        return x_masked
+#     def __call__(self, x):
+#         n, t, l = x.shape
+#         x_masked = x.clone()
+#         mask_size = random.randint(1, self.max_mask_size)
+#         start = random.randint(0, t - mask_size)
+#         x_masked[:, start:start+mask_size, :] = 0
+#         return x_masked
 
 class ECGEncoder(nn.Module):
     def __init__(self, args):
@@ -185,11 +182,13 @@ class ECGEncoder(nn.Module):
         """
         super().__init__()
 
-        self.transform = Compose([
-            RotateTransform(angle=45),
-            ScaleTimeTransform(scale=1.5, orig_time=5000),
-            TimeMaskTransform(max_mask_size=100)
-        ])
+        self.transform = "smd-ssl"
+
+        # self.transform = Compose([
+        #     RotateTransform(angle=45),
+        #     ScaleTimeTransform(scale=1.5, orig_time=5000),
+        #     TimeMaskTransform(max_mask_size=100)
+        # ])
 
         if args.pretrained:
             self.resnet = models.resnet18(weights="IMAGENET1K_V1")
@@ -201,16 +200,34 @@ class ECGEncoder(nn.Module):
 
         self.layer_norm = nn.LayerNorm(args.d)
 
-    def apply_ecg_aug(self, x, transform=self.transform):
-        N = x.shape[0]
-        C = x.shape[1]
-        S = x.shape[2]
-        L = x.shape[3]
+    # ECG Signal augmentation from SMD-SSL ICML paper
+    def mask_augmentation(self, signal, crop_rate=0.25):
+        # (1, 5000, 12) for signal x[i]
+        signal = signal.clone()
+        if crop_rate == 0: return signal
 
-        # apply SimSiam augmentation per image tensor
-        view = torch.empty(N, C, S, L)
+        C, S, L = signal.shape
+        crop_len = int(crop_rate * S)
+
+        # mask random start position per lead
+        for l in range(L):
+            crop_start = np.random.randint(0, S - crop_len)
+            # fill with Gaussian noise
+            stdval = 0.5
+            noise = 0.5 * stdval * np.random.randn(crop_len)
+            if crop_start + crop_len <= S:
+                signal[0, crop_start:crop_start+crop_len, l] = torch.tensor(noise)
+            else:
+                remainder = crop_len - (S-crop_start)
+                signal[0, crop_start:S, l] = torch.tensor(noise[:S-crop_start])
+                signal[0, 0:remainder, l] = torch.tensor(noise[S-crop_start:])
+        return signal
+
+    def apply_ecg_aug(self, x, simsiam_transforms=True, ssl_mask=True):
+        N = x.shape[0]
+        view = torch.empty_like(x)
         for i in range(N):
-            aug_x = transform(x[i])
+            aug_x = self.mask_augmentation(x[i])
             view[i] = aug_x
         return view
 
@@ -229,7 +246,7 @@ class ECGEncoder(nn.Module):
 
 # From SCARF by Google Research team in 2021
 class LabSCARFTransform:
-    def __init__(self, corruption_rate=0.2): # slightly lower than original SCARF
+    def __init__(self, corruption_rate=0.2): # slightly less harsh than original SCARF 
         self.corruption_rate = corruption_rate
     
     def __call__(self, x):

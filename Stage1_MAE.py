@@ -37,27 +37,6 @@ def main(args):
         log_max_images=args.log_max_images,
     )
 
-    # ---------- Test the Model ----------
-    model.eval()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-
-    batch = next(iter(train_loader))  # CheXpertDataModule returns only images
-    imgs = batch.to(device)           # [B, 3, 224, 224]
-
-    with torch.no_grad():
-        out = model(imgs)
-
-    print("Forward output type:", type(out))
-    if isinstance(out, tuple) or isinstance(out, list):
-        print("Tuple length:", len(out))
-        for i, t in enumerate(out):
-            if torch.is_tensor(t):
-                print(f"  out[{i}] shape:", t.shape)
-    else:
-        if torch.is_tensor(out):
-            print("Output shape:", out.shape)
-
     logger = WandbLogger(project=args.wandb_project)
 
     trainer = pl.Trainer(

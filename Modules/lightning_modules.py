@@ -170,9 +170,9 @@ class MAELightningModule(pl.LightningModule):
 class ClassificationLightningModule(pl.LightningModule):
     def __init__(
         self,
-        model,
         num_classes: int,
-        model_weights=None,
+        model_mode: str = "imagenet",               # "imagenet" or "mae"
+        model_weights_path: Optional[str] = None,
         freeze_backbone: bool = True,
         pos_weight: Optional[torch.Tensor] = None,
         lr: float = 1e-4,
@@ -180,9 +180,10 @@ class ClassificationLightningModule(pl.LightningModule):
         warmup_epochs: int = 10,
         betas=(0.9, 0.95),
         class_names: Optional[List[str]] = None,
+        backbone_name: str = "vit_base_patch16_224",
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=["model", "model_weights"])
+        self.save_hyperparameters()
 
         self.num_classes = num_classes
         self.is_binary = num_classes == 1
@@ -190,8 +191,9 @@ class ClassificationLightningModule(pl.LightningModule):
         # backbone + head
         self.model = CXRModel(
             num_classes=num_classes,
-            vit_model=model,
-            model_weights=model_weights,
+            mode=model_mode,
+            backbone_name=backbone_name,
+            model_weights=model_weights_path,
             freeze_backbone=freeze_backbone,
         )
 

@@ -2,17 +2,13 @@ import torch
 
 # --- Existing code ---
 from Modules.data_modules import CXRDataModule
+from Modules.lightning_modules import ClassificationLightningModule
 
 import argparse
-from Scripts.MAE.mae_to_vit import get_vit_from_mae
-
-from Modules.lightning_modules import ClassificationLightningModule
 
 import lightning as pl
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
-
-import timm
 
 def main(args):
     data_module = CXRDataModule(
@@ -35,19 +31,10 @@ def main(args):
     print(f"Number of validation batches: {len(val_loader)}")
     print(f"Number of test batches: {len(test_loader)}")
 
-    if args.mode == "imagenet":
-        # get the ViT model with ImageNet weights from timm
-        vit_model = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
-    elif args.mode == "mae":
-        ckpt = torch.load(args.ckpt_path, map_location="cpu", weights_only=False)
-        vit_model = get_vit_from_mae(ckpt, global_pool=False)
-    else:
-        raise NotImplementedError(f"Mode {args.mode} not implemented.")
-
     model = ClassificationLightningModule(
-        model=vit_model,
         num_classes=1 if args.task == "COVID" else 14,
-        model_weights=None,
+        model_mode=args.mode,
+        model_weights_path=args.ckpt_path,
         freeze_backbone=True,
         pos_weight=float(args.pos_weight) if args.pos_weight is not None else None,
         lr=args.lr,
@@ -57,30 +44,9 @@ def main(args):
                     'Hernia', 'Pneumothorax', 'Nodule', 'Edema', 'Effusion', 
                     'Pleural_Thickening', 'Cardiomegaly', 'Mass', 'Fibrosis', 
                     'Consolidation', 'Pneumonia', 'Infiltration', 'Emphysema', 'Atelectasis'
-                ]
+                ],
+        backbone_name="vit_base_patch16_224", # default backbone
     )
-
-    # ---------- Test the Model ----------
-    model.eval()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-
-    batch = next(iter(train_loader))  # CheXpertDataModule returns only images
-    imgs, labels = batch
-    imgs = imgs.to(device)
-
-    with torch.no_grad():
-        out = model(imgs)
-
-    print("Forward output type:", type(out))
-    if isinstance(out, tuple) or isinstance(out, list):
-        print("Tuple length:", len(out))
-        for i, t in enumerate(out):
-            if torch.is_tensor(t):
-                print(f"  out[{i}] shape:", t.shape)
-    else:
-        if torch.is_tensor(out):
-            print("Output shape:", out.shape)
 
     wandb_logger = WandbLogger(
         project=args.wandb_project
@@ -90,7 +56,8 @@ def main(args):
         monitor="val/auroc" if args.task == "COVID" else "val/auroc_macro",
         mode="max",
         save_top_k=1,
-        filename=args.checkpoint_dir + "/sl-{epoch:02d}-{val/auroc:.4f}" if args.task == "COVID" else args.checkpoint_dir + "/sl-{epoch:02d}-{val/auroc_macro:.4f}",
+        filename="sl-{epoch:02d}-val/{val/auroc:.4f}" if args.task == "COVID" else "sl-{epoch:02d}-val/{val/auroc_macro:.4f}",
+        dirpath=args.checkpoint_dir,
     )
 
     lr_monitor = LearningRateMonitor(logging_interval="step")
@@ -109,19 +76,22 @@ def main(args):
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
-    trainer.save_checkpoint(args.checkpoint_dir + "/final_sl_model.ckpt")
     
-    trainer.test(model, dataloaders=test_loader)
+    best_model = ClassificationLightningModule.load_from_checkpoint(
+        checkpoint_cb.best_model_path
+    )
+
+    trainer.test(best_model, dataloaders=test_loader)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--num_workers", type=int, default=12)
     parser.add_argument("--image_size", type=int, default=224)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=0.05)
-    parser.add_argument("--warmup_epochs", type=int, default=5)
-    parser.add_argument("--max_epochs", type=int, default=80)
+    parser.add_argument("--weight_decay", type=float, default=5e-3)
+    parser.add_argument("--warmup_epochs", type=int, default=3)
+    parser.add_argument("--max_epochs", type=int, default=35)
     parser.add_argument("--devices", type=int, default=1)
     parser.add_argument("--num_nodes", type=int, default=1)
     parser.add_argument("--pos_weight", type=float, default=None)

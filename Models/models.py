@@ -2,56 +2,55 @@ import timm
 import torch
 import torch.nn as nn
 
+from Scripts.MAE.mae_to_vit import get_vit_from_mae
+
 class CXRModel(nn.Module):
     def __init__(
         self,
-        num_classes: int = 14,
-        vit_model: nn.Module = None,
-        model_weights: dict | None = None,
+        num_classes: int,
+        mode: str = "imagenet",               # "imagenet" or "mae"
+        backbone_name: str = "vit_base_patch16_224",
+        model_weights: str | None = None,     # only used if mode == "mae"
         freeze_backbone: bool = True,
     ):
         super().__init__()
 
-        # 1. Build or take backbone WITHOUT classifier head
-        if vit_model is not None:
-            backbone = vit_model
+        # --------- 1. Build backbone inside the class ----------
+        if mode == "imagenet":
+            backbone = timm.create_model(
+                backbone_name,
+                pretrained=True,
+                num_classes=0,   # feature extractor
+            )
+        elif mode == "mae":
+            if model_weights is None:
+                raise ValueError("model_weights must be provided when mode='mae'")
+            mae_ckpt = torch.load(model_weights, map_location="cpu", weights_only=False)
+            backbone = get_vit_from_mae(mae_ckpt, global_pool=False)
         else:
-            raise ValueError("vit_model must be provided.")
+            raise ValueError(f"Unknown mode: {mode}")
 
-        # If the backbone still has a classifier head, strip/reset it
+        # Remove classifier head if any
         if hasattr(backbone, "reset_classifier"):
             backbone.reset_classifier(0)
         elif hasattr(backbone, "head"):
             backbone.head = nn.Identity()
 
-        # 2. Load pretrained backbone weights (ignore classifier mismatches)
-        if model_weights is not None:
-            missing, unexpected = backbone.load_state_dict(
-                model_weights, strict=False
-            )
-            if len(unexpected) > 0:
-                print(f"[CXRModel] Ignored unexpected keys in state_dict: {unexpected}")
-            if len(missing) > 0:
-                print(f"[CXRModel] Missing keys when loading state_dict: {missing}")
-
         self.backbone = backbone
 
-        # 3. Freeze backbone params for linear probing
+        # --------- 2. Freeze backbone if linear probing ----------
         if freeze_backbone:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
+            for p in self.backbone.parameters():
+                p.requires_grad = False
             self.backbone.eval()
 
-        # 4. New trainable linear head
+        # --------- 3. New classifier head ----------
         in_dim = getattr(self.backbone, "num_features", None)
         if in_dim is None:
-            # Some ViTs only expose embed_dim
             in_dim = getattr(self.backbone, "embed_dim")
-
         self.head = nn.Linear(in_dim, num_classes)
 
     def forward(self, x):
-        # For timm ViT with num_classes=0, backbone(x) returns pooled features [B, C]
-        feats = self.backbone(x)
-        logits = self.head(feats)
+        feats = self.backbone(x)     # [B, C]
+        logits = self.head(feats)    # [B, num_classes]
         return logits

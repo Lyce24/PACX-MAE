@@ -5,6 +5,7 @@ import importlib
 import os
 import random
 import time
+import lightning
 
 from lightning.pytorch import Trainer, seed_everything
 from lightning.pytorch.callbacks import ModelCheckpoint

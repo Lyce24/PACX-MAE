@@ -10,6 +10,7 @@ from torchvision import models
 import timm
 
 from torchvision.transforms import Compose
+from torch.distributions.uniform import Uniform
 import random
 import math
 import simsiam
@@ -19,7 +20,7 @@ from collections import OrderedDict
 import torch.nn.functional as F
 
 from datasets import SymileMIMICRetrievalDataset
-from losses import clip, symile, zeroshot_retrieval_logits
+from losses import infonce, clip, symile, zeroshot_retrieval_logits
 from utils import PathToStrEncoder
 
 # ViT-b-16 CXREncoder from Kenichi Maeda
@@ -117,13 +118,13 @@ class CXREncoder(nn.Module):
         z2 = self.proj(feats2)
         return self.layer_norm(z1), self.layer_norm(z2)      # (B, d)
 
-
+# Optimal ECG augmentation combination from 3KG paper
 class RotateTransform:
     def __init__(self, angle=45):
         self.angle = angle
     
     def __call__(self, x):
-        # (1, 5000, 12) for single sample of x
+        # x[i] = (1, 5000, 12)
         angle_rad = math.radians(self.angle)
         theta = torch.tensor([
             [math.cos(angle_rad), -math.sin(angle_rad), 0],
@@ -132,7 +133,7 @@ class RotateTransform:
         x = x.unsqueeze(0)  # add batch dim for grid_sample
         grid = torch.nn.functional.affine_grid(theta.unsqueeze(0), x.size(), align_corners=False)
         x_rot = torch.nn.functional.grid_sample(x, grid, align_corners=False, padding_mode='border')
-        return x_rot.squeeze(0)
+        return x_rot.squeeze(0) # return to original dim
 
 class ScaleTimeTransform:
     def __init__(self, scale=1.5, orig_time=5000):
@@ -226,6 +227,26 @@ class ECGEncoder(nn.Module):
         z2 = self.resnet(x2)
         return self.layer_norm(z1), self.layer_norm(z2)
 
+# From SCARF by Google Research team in 2021
+class LabSCARFTransform:
+    def __init__(self, corruption_rate=0.2): # slightly lower than original SCARF
+        self.corruption_rate = corruption_rate
+    
+    def __call__(self, x):
+        N, _ = x.size()
+
+        features_low = torch.min(x, dim=0).values()
+        features_high = torch.max(x, dim=0).values()
+        marginals = Uniform(torch.Tensor(features_low), torch.Tensor(features_high))
+
+        # 1: create a mask of size (batch size, m) where for each sample we set the jth column to True at random, such that corruption_len / m = corruption_rate
+        # 2: create a random tensor of size (batch size, m) drawn from the uniform distribution defined by the min, max values of the training set
+        # 3: replace x_corrupted_ij by x_random_ij where mask_ij is true
+        corruption_mask = torch.rand_like(x, device=x.device) > self.corruption_rate
+        x_random = marginals.sample(torch.Size((N,))).to(x.device)
+        x_corrupted = torch.where(corruption_mask, x_random, x)
+
+        return x_corrupted
 
 class LabsEncoder(nn.Module):
     def __init__(self, args):
@@ -241,11 +262,26 @@ class LabsEncoder(nn.Module):
             args (Namespace): A namespace object containing configuration for the model.
         """
         super().__init__()
+
+        self.transform = LabSCARFTransform(corruption_rate=0.15)
+
         self.fc1 = nn.Linear(100, 256)
         self.fc2 = nn.Linear(256, 1024)
         self.fc3 = nn.Linear(1024, args.d)
         self.gelu = nn.GELU()
         self.layer_norm = nn.LayerNorm(args.d)
+
+    def _encode(self, x):
+        """
+        MLP encoder for lab features
+        """
+        x = self.fc1(x)
+        x = self.gelu(x)
+        x = self.fc2(x)
+        x = self.gelu(x)
+        x = self.fc3(x)
+        x = self.layer_norm(x)
+        return x
 
     def forward(self, x):
         """
@@ -255,13 +291,11 @@ class LabsEncoder(nn.Module):
         Returns:
             x (torch.Tensor): learned labs representation (batch_sz, d)
         """
-        x = self.fc1(x)
-        x = self.gelu(x)
-        x = self.fc2(x)
-        x = self.gelu(x)
-        x = self.fc3(x)
-        x = self.layer_norm(x)
-        return x
+        v1 = self.transform(x)
+        v2 = self.transform(x)
+        z1 = self._encode(v1)
+        z2 = self._encode(v2)
+        return z1, z2
 
 class MMFTModel(pl.LightningModule):
     def __init__(self, **args):
@@ -278,7 +312,7 @@ class MMFTModel(pl.LightningModule):
 
         self.args = Namespace(**args)
 
-        self.loss_fn = infonce if self.args.loss_fn == "infonce" else symile
+        self.loss_fn = infonce # if self.args.loss_fn == "infonce" else symile
 
         self.ecg_encoder = ECGEncoder(self.args)
         self.cxr_encoder = CXREncoder(self.args)
@@ -411,9 +445,9 @@ class MMFTModel(pl.LightningModule):
         Returns:
             torch.Tensor: The computed loss for the batch.
         """
-        r_c, r_e, r_l, logit_scale_exp = self(batch)
+        z1, z2, logit_scale_exp = self(batch)
 
-        loss = self.loss_fn(r_c, r_e, r_l, logit_scale_exp, self.args.negative_sampling)
+        loss = self.loss_fn(z1, z2, logit_scale_exp, self.args.negative_sampling)
 
         # tracking to help evaluate optimization (given total correlation lower bound established in paper)
         log_n = np.log(len(batch[0]))

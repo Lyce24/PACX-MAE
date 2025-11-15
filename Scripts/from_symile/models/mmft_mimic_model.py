@@ -383,7 +383,7 @@ class MMFTModel(pl.LightningModule):
         r_e1, r_e2 = self.ecg_encoder(x[1])
 
         labs = torch.cat([x[2], x[3]], dim=1)
-        r_l_1, r_l_2 = self.labs_encoder(labs)
+        r_l1, r_l2 = self.labs_encoder(labs)
 
         # sequence dim for mha
         r_c1_seq = r_c1.unsqueeze(1)  # (B, 1, 512)

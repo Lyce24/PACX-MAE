@@ -56,6 +56,8 @@ def parse_args_main():
     parser.add_argument("--d", type=int,
                         help="Dimensionality used by the linear projection heads \
                               of all three encoders.")
+    parser.add_argument("--num_heads", type=int,
+                        help="Number of heads for MultiHead Attention.")
     parser.add_argument("--data_dir", type=Path,
                         help="Directory with dataset csvs.")
     parser.add_argument("--drop_last", type=str_to_bool,

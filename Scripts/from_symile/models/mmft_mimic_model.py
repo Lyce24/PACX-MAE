@@ -493,9 +493,9 @@ class MMFTModel(pl.LightningModule):
         Returns:
             torch.Tensor: The computed loss for the batch.
         """
-        r_c, r_e, r_l, logit_scale_exp = self(batch)
+        z1, z2, logit_scale_exp = self(batch)
 
-        loss = self.loss_fn(r_c, r_e, r_l, logit_scale_exp, self.args.negative_sampling)
+        loss = self.loss_fn(z1, z2, logit_scale_exp)
 
         self.log("val_loss", loss,
                  on_step=True, on_epoch=True, sync_dist=True, prog_bar=True)

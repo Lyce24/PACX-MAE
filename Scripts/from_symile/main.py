@@ -74,10 +74,18 @@ def binary_xor_main(args):
         else:
             logger = False
 
-        checkpoint_callback = ModelCheckpoint(dirpath=p_hat_save_dir,
+        if args.experiment == "mmft_mimic":
+            checkpoint_callback = ModelCheckpoint(dirpath=p_hat_save_dir,
+                                                filename="{epoch}",
+                                                every_n_epochs=1,
+                                                save_top_k=-1
+            )
+        else:
+            checkpoint_callback = ModelCheckpoint(dirpath=p_hat_save_dir,
                                               filename="{epoch}-{val_loss:.4f}",
                                               mode="min",
                                               monitor="val_loss")
+        
 
         trainer = Trainer(
             callbacks=checkpoint_callback,

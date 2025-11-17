@@ -53,14 +53,14 @@ class MAELightningModule(pl.LightningModule):
         imgs = batch[0] if isinstance(batch, (list, tuple)) else batch
         _, pred, mask = self(imgs)
         loss = self.forward_loss(imgs, pred, mask)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('train/loss', loss, on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         imgs = batch[0] if isinstance(batch, (list, tuple)) else batch
         _, pred, mask = self(imgs)
         loss = self.forward_loss(imgs, pred, mask)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=imgs.size(0), sync_dist=True)
+        self.log("val/loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=imgs.size(0), sync_dist=True)
 
         # optional: log reconstructions on first batch every N epochs
         if (

@@ -20,7 +20,7 @@
 /nih_cxr_ssl_eval
 output.txt
 
-*sh
+*.sh
 *.ipynb_checkpoints
 *.pyc
 *.pkl

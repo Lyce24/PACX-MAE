@@ -1,15 +1,38 @@
+import argparse
+import time
+from pathlib import Path
+
+import lightning as pl
+from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.loggers import WandbLogger
+
 import torch
 
 from Modules.data_modules import CXRDataModule
 from Modules.mae_lit import MAELightningModule
 
-from lightning.pytorch.loggers import WandbLogger
-import lightning as pl
-
-import argparse
-import time
 
 def main(args):
+
+    current_time = time.strftime("%Y%m%d_%H%M%S")
+
+    run_name = (
+        f"mae_cxr_base"
+        f"_bs{args.batch_size}"
+        f"_mr{args.mask_ratio}"
+        f"_lr{args.lr}"
+        f"_wd{args.weight_decay}"
+        f"_ep{args.max_epochs}"
+        f"_we{args.warmup_epochs}"
+        f"_{current_time}"
+    )
+
+    # root dir for ALL outputs of this run
+    base_dir = Path(args.output_dir).expanduser().resolve()
+    run_dir = base_dir / run_name
+    ckpt_dir = run_dir / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
     data_module = CXRDataModule(
         train_csv=args.train_csv,
         val_csv=args.val_csv,
@@ -32,16 +55,28 @@ def main(args):
         log_max_images=args.log_max_images,
     )
 
-    current_time = time.strftime("%Y%m%d_%H%M%S")
+    logger = WandbLogger(
+        project=args.wandb_project,
+        name=run_name,
+        save_dir=str(run_dir),   # put wandb run dir under the same run folder
+        log_model=False,         # avoid storing model copies as W&B artifacts
+    )
 
-    logger = WandbLogger(project=args.wandb_project,
-                         name=f"mae_cxr_base_bs{args.batch_size}_mr{args.mask_ratio}_lr{args.lr}_wd{args.weight_decay}_ep{args.max_epochs}_we{args.warmup_epochs}_{current_time}",
-                         log_model="all")
+    checkpoint_cb = ModelCheckpoint(
+        dirpath=str(ckpt_dir),
+        filename="epoch{epoch:03d}-valloss{val/loss:.4f}",
+        monitor="val/loss",
+        mode="min",
+        save_top_k=1,
+        save_last=True,
+        auto_insert_metric_name=False,
+    )
 
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
-        precision="16-mixed",   # AMP
+        precision="16-mixed",
         logger=logger,
+        callbacks=[checkpoint_cb],
         gradient_clip_val=0.0,
         deterministic=False,
         check_val_every_n_epoch=1,
@@ -49,10 +84,13 @@ def main(args):
         devices=args.devices,
         num_nodes=args.num_nodes,
         strategy="auto",
-        default_root_dir=f"{args.checkpoint_dir}/mae_cxr_base_bs{args.batch_size}_mr{args.mask_ratio}_lr{args.lr}_wd{args.weight_decay}_ep{args.max_epochs}_we{args.warmup_epochs}_{current_time}"
+        default_root_dir=str(run_dir),  # lightning_logs/ will live here
     )
 
     trainer.fit(model, datamodule=data_module)
+
+    print(f"\nRun directory: {run_dir}")
+    print(f"Checkpoints saved in: {ckpt_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -70,11 +108,19 @@ if __name__ == "__main__":
     parser.add_argument("--log_images_every_n_epochs", type=int, default=10)
     parser.add_argument("--log_max_images", type=int, default=8)
 
+    # Infra
     parser.add_argument("--wandb_project", type=str, default="mae-cxr")
     parser.add_argument("--max_epochs", type=int, default=400)
     parser.add_argument("--devices", type=int, default=2)
     parser.add_argument("--num_nodes", type=int, default=1)
-    parser.add_argument("--checkpoint_dir", type=str, default="../../scratch/model_checkpoints/mae")
+
+    # Single clean root directory for all runs/checkpoints
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="../../scratch/model_checkpoints/mae_cxr",
+    )
+    
     args = parser.parse_args()
     
     main(args)

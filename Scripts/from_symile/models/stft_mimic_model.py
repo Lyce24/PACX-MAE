@@ -200,12 +200,6 @@ class ECGEncoder(nn.Module):
 
         self.transform = "smd-ssl"
 
-        # self.transform = Compose([
-        #     RotateTransform(angle=45),
-        #     ScaleTimeTransform(scale=1.5, orig_time=5000),
-        #     TimeMaskTransform(max_mask_size=100)
-        # ])
-
         if args.pretrained:
             self.resnet = models.resnet18(weights="IMAGENET1K_V1")
         else:
@@ -216,36 +210,12 @@ class ECGEncoder(nn.Module):
 
         self.layer_norm = nn.LayerNorm(args.d)
 
-    # ECG Signal augmentation from SMD-SSL ICML paper
-    def mask_augmentation(self, signal, crop_rate=0.25):
-        # (1, 5000, 12) for signal x[i]
-        signal = signal.clone()
-        if crop_rate == 0: return signal
-
-        C, S, L = signal.shape
-        crop_len = int(crop_rate * S)
-
-        # mask random start position per lead
-        for l in range(L):
-            crop_start = np.random.randint(0, S - crop_len)
-            # fill with Gaussian noise
-            stdval = 0.5
-            noise = 0.5 * stdval * np.random.randn(crop_len)
-            if crop_start + crop_len <= S:
-                signal[0, crop_start:crop_start+crop_len, l] = torch.tensor(noise)
-            else:
-                remainder = crop_len - (S-crop_start)
-                signal[0, crop_start:S, l] = torch.tensor(noise[:S-crop_start])
-                signal[0, 0:remainder, l] = torch.tensor(noise[S-crop_start:])
-        return signal
-
-    def apply_ecg_aug(self, x, simsiam_transforms=True, ssl_mask=True):
-        N = x.shape[0]
-        view = torch.empty_like(x)
-        for i in range(N):
-            aug_x = self.mask_augmentation(x[i])
-            view[i] = aug_x
-        return view
+        if getattr(args, "symile_mimic_weights_path", None):
+            sd = _load_state_dict_maybe_lightning(args.symile_mimic_weights_path)
+            sd = _strip_prefix(sd, prefixes=("ecg_encoder.",)) 
+            missing, unexpected = self.resnet.load_state_dict(sd, strict=False)
+            missing2, unexpected2 = self.load_state_dict(sd, strict=False)
+            print(f"[Teacher ECG loaded] missing={len(missing+missing2)}, unexpected={len(unexpected+unexpected2)}")
 
     def forward(self, x):
         """
@@ -254,37 +224,10 @@ class ECGEncoder(nn.Module):
         Returns:
             x (torch.Tensor): learned ECG representation (batch_sz, d)
         """
-        v1 = self.apply_ecg_aug(x)
-        v2 = self.apply_ecg_aug(x)
-        z1 = self.resnet(v1)
-        z2 = self.resnet(v2)
-        return self.layer_norm(z1), self.layer_norm(z2)
-
-# From SCARF by Google Research team in 2021
-class LabSCARFTransform:
-    def __init__(self, corruption_rate=0.2): # slightly less harsh than original SCARF 
-        self.corruption_rate = corruption_rate
+        x = self.resnet(x)
+        x = self.layer_norm(x)
+        return x
     
-    def __call__(self, x):
-        N, _ = x.size()
-
-        features_low = x.min(dim=0).values
-        features_high = x.max(dim=0).values
-
-        eps = 1e-6
-        same_mask = (features_low >= features_high)
-        features_high = torch.where(same_mask, features_low + eps, features_high)
-        marginals = Uniform(features_low, features_high)
-
-
-        # 1: create a mask of size (batch size, m) where for each sample we set the jth column to True at random, such that corruption_len / m = corruption_rate
-        # 2: create a random tensor of size (batch size, m) drawn from the uniform distribution defined by the min, max values of the training set
-        # 3: replace x_corrupted_ij by x_random_ij where mask_ij is true
-        corruption_mask = torch.rand_like(x, device=x.device) > self.corruption_rate
-        x_random = marginals.sample(torch.Size((N,))).to(x.device)
-        x_corrupted = torch.where(corruption_mask, x_random, x)
-
-        return x_corrupted
 
 class LabsEncoder(nn.Module):
     def __init__(self, args):
@@ -300,26 +243,17 @@ class LabsEncoder(nn.Module):
             args (Namespace): A namespace object containing configuration for the model.
         """
         super().__init__()
-
-        self.transform = LabSCARFTransform(corruption_rate=0.15)
-
         self.fc1 = nn.Linear(100, 256)
         self.fc2 = nn.Linear(256, 1024)
         self.fc3 = nn.Linear(1024, args.d)
         self.gelu = nn.GELU()
         self.layer_norm = nn.LayerNorm(args.d)
 
-    def _encode(self, x):
-        """
-        MLP encoder for lab features
-        """
-        x = self.fc1(x)
-        x = self.gelu(x)
-        x = self.fc2(x)
-        x = self.gelu(x)
-        x = self.fc3(x)
-        x = self.layer_norm(x)
-        return x
+        if getattr(args, "symile_mimic_weights_path", None):
+            sd = _load_state_dict_maybe_lightning(args.symile_mimic_weights_path)
+            sd = _strip_prefix(sd, prefixes=("labs_encoder.",)) 
+            missing, unexpected = self.load_state_dict(sd, strict=False)
+            print(f"[Teacher ECG loaded] missing={len(missing)}, unexpected={len(unexpected)}")
 
     def forward(self, x):
         """
@@ -329,14 +263,16 @@ class LabsEncoder(nn.Module):
         Returns:
             x (torch.Tensor): learned labs representation (batch_sz, d)
         """
-        v1 = self.transform(x)
-        v2 = self.transform(x)
-        z1 = self._encode(v1)
-        z2 = self._encode(v2)
-        return z1, z2
+        x = self.fc1(x)
+        x = self.gelu(x)
+        x = self.fc2(x)
+        x = self.gelu(x)
+        x = self.fc3(x)
+        x = self.layer_norm(x)
+        return x
     
 class TeacherEncoder(nn.Module):
-    def __init__(self, **args):
+    def __init__(self, args):
         """
         Initialize ...
 
@@ -345,9 +281,7 @@ class TeacherEncoder(nn.Module):
         """
         super().__init__()
 
-        self.save_hyperparameters()
-
-        self.args = Namespace(**args)
+        self.args = args
 
         self.loss_fn = infonce if self.args.loss_fn == "infonce" else symile
 
@@ -370,18 +304,6 @@ class TeacherEncoder(nn.Module):
         self.freeze_module(self.cxr_encoder)
         self.freeze_module(self.ecg_encoder)
         self.freeze_module(self.labs_encoder)
-
-        self.cxr_attends_ecg = nn.MultiheadAttention(
-            self.args.d, self.args.num_heads, batch_first=True
-        )
-        # CXR attends to Labs
-        self.cxr_attends_lab = nn.MultiheadAttention(
-            self.args.d, self.args.num_heads, batch_first=True
-        )
-        # ECG attends to Labs
-        self.ecg_attends_lab = nn.MultiheadAttention(
-            self.args.d, self.args.num_heads, batch_first=True
-        )
         
         # Fusion MLP projection after concatenation
         self.fusion_proj = nn.Sequential(
@@ -389,12 +311,6 @@ class TeacherEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(1024, self.args.d)
         )
-
-        self.freeze_module(self.cxr_attends_ecg)
-        self.freeze_module(self.cxr_attends_lab)
-        self.freeze_module(self.ecg_attends_lab)
-        self.freeze_module(self.fusion_proj)
-
 
         # temperature parameter is learned as done by CLIP:
         # https://github.com/openai/CLIP/blob/a1d071733d7111c9c014f024669f959182114e33/clip/model.py#L295
@@ -430,33 +346,10 @@ class TeacherEncoder(nn.Module):
         labs = torch.cat([x[2], x[3]], dim=1)  # (B, 100)
 
         r_c = self.cxr_encoder(cxr) 
-        r_e, _ = self.ecg_encoder(ecg)
-        r_l, _ = self.labs_encoder(labs)
+        r_e = self.ecg_encoder(ecg)
+        r_l = self.labs_encoder(labs)
 
-        r_c = r_c.unsqueeze(1)               # (B, 1, d)
-        r_e = r_e.unsqueeze(1)
-        r_l = r_l.unsqueeze(1)
-
-        r_c_from_e, _ = self.cxr_attends_ecg(
-            query=r_c, key=r_e, value=r_e
-        )
-        r_c_from_l, _ = self.cxr_attends_lab(
-            query=r_c, key=r_l, value=r_l
-        )
-        r_e_from_l, _ = self.ecg_attends_lab(
-            query=r_e, key=r_l, value=r_l
-        )
-
-        r_c_upd = r_c + r_c_from_e + r_c_from_l    # (B, 1, d)
-        r_e_upd = r_e + r_e_from_l
-        r_l_upd = r_l
-
-        r_c_upd = r_c_upd.squeeze(1)          # (B, d)
-        r_e_upd = r_e_upd.squeeze(1)
-        r_l_upd = r_l_upd.squeeze(1)
-
-        fused = torch.cat([r_c_upd, r_e_upd, r_l_upd], dim=1)  
-
+        fused = torch.cat([r_c, r_e, r_l], dim=1)  
         t = self.fusion_proj(fused) 
 
         return t
@@ -477,8 +370,8 @@ class STFTModel(pl.LightningModule):
 
         self.args = Namespace(**args)
 
-        self.teacher = TeacherEncoder(**args)
-        self.student = StudentCXREncoder(**args)
+        self.teacher = TeacherEncoder(self.args)
+        self.student = StudentCXREncoder(self.args)
 
         self.loss_ssl = infonce
         self.loss_clip = clip
@@ -538,16 +431,16 @@ class STFTModel(pl.LightningModule):
         se1, se2, t = self(batch)
 
         # SSL loss
-        L_ssl = self.loss_ssl(se1, se2)
+        L_ssl = self.loss_ssl(se1, se2, self.logit_scale.exp())
 
         # distillation loss
         L_distill = (1 - self.loss_distill(se1, t).mean()) + \
                     (1 - self.loss_distill(se2, t).mean())
         
         # clip loss
-        L_clip = self.loss_clip(se1, t, self.teacher.logit_scale.exp()) + \
-                 self.loss_clip(se2, t, self.teacher.logit_scale.exp())
-        
+        L_clip = infonce(se1, t, self.teacher.logit_scale.exp()) + \
+                infonce(se2, t, self.teacher.logit_scale.exp())
+
         # total loss
         total_loss = L_ssl + L_distill + L_clip
 

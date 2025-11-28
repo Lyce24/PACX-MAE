@@ -67,6 +67,14 @@ def main(args):
         ]
         num_classes = len(class_names)
         task_type = "multilabel"
+    elif args.task == "ECHO":
+        class_names = [
+            'ivsd', 'lvpwd', 'lvidd', # technically more anatomic than physiological--could exclude these
+            'slvh', 'dlv', 
+            'heart_transplant', 'lung_transplant', 'pacemaker_or_icd',
+        ]
+        num_classes = len(class_names)
+        task_type = "multilabel"
     else:
         raise ValueError(f"Unsupported task: {args.task}")
 

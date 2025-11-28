@@ -249,6 +249,28 @@ class CXRDataModule(pl.LightningDataModule):
                 labels=["Covid-19","Emphysema","Normal","Pneumonia-Bacterial","Pneumonia-Viral","Tuberculosis"],
                 path_index="Path"
             )
+        elif self.task == "ECHO":
+            self.train_dataset = ChestXrayDataset(
+                df=self.train_df,
+                root_dir=self.root_dir + "/train",
+                transform=self.sl_train,
+                labels=["slvh","dlv","heart_transplant","lung_transplant","pacemaker_or_icd"],
+                path_index="cxr_filename"
+            )
+            self.val_dataset = ChestXrayDataset(
+                df=self.val_df,
+                root_dir=self.root_dir + "/val",
+                transform=self.val_transform,
+                labels=["slvh","dlv","heart_transplant","lung_transplant","pacemaker_or_icd"],
+                path_index="cxr_filename"
+            )            
+            self.test_dataset = ChestXrayDataset(
+                df=self.test_df,
+                root_dir=self.root_dir + "/test",
+                transform=self.val_transform,
+                labels=["slvh","dlv","heart_transplant","lung_transplant","pacemaker_or_icd"],
+                path_index="cxr_filename"
+            )
         else:
             raise ValueError(f"Unsupported task: {self.task}")
 

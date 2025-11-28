@@ -153,6 +153,12 @@ if __name__ == "__main__":
         default="./src/chest-x-ray-dataset-with-lung-segmentation-1.0.0/chest-x-ray-dataset-with-lung-segmentation-1.0.0/files/",
     )
 
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train_csv", type=str, required=True)
+    parser.add_argument("--val_csv", type=str, required=True)
+    parser.add_argument("--test_csv", type=str, required=True)
+    parser.add_argument("--task", type=str, default="seg")
+
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--num_workers", type=int, default=16)
     parser.add_argument("--image_size", type=int, default=224)

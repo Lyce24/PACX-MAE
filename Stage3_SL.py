@@ -69,7 +69,6 @@ def main(args):
         task_type = "multilabel"
     elif args.task == "ECHO":
         class_names = [
-            'ivsd', 'lvpwd', 'lvidd', # technically more anatomic than physiological--could exclude these
             'slvh', 'dlv', 
             'heart_transplant', 'lung_transplant', 'pacemaker_or_icd',
         ]

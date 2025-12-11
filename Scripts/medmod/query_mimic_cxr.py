@@ -27,7 +27,12 @@ def main():
         cxr_path = str(row.cxr_path)
         cxr_path_correct = cxr_path[:4] + "p" + cxr_path[4:]
         cmd_cxr[7] = cmd_cxr[7] + str(cxr_path_correct)
-        subprocess.run(cmd_cxr, check=True)
+
+        cxr_path_check = "/users/mspancho/scratch/" + cmd_cxr[7][8:]
+        if os.path.exists(cxr_path_check):
+            continue
+        else:
+            subprocess.run(cmd_cxr, check=True)
 
     print("Script complete")
 

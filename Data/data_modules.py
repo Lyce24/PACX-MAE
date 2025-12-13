@@ -425,18 +425,34 @@ class CXRSegDataModule(pl.LightningDataModule):
             pin_memory=True,
         )
 
+import numpy as np
+from torch.utils.data import Dataset, DataLoader
+
+class SymileMIMICDataset(Dataset):
+    def __init__(self, data_dir: Path, split: str):
+        self.cxr = np.load(data_dir / split / f"cxr_{split}.npy", mmap_mode="r")
+        self.ecg = np.load(data_dir / split / f"ecg_{split}.npy", mmap_mode="r")
+        self.labs_pct = np.load(data_dir / split / f"labs_percentiles_{split}.npy", mmap_mode="r")
+        self.labs_miss = np.load(data_dir / split / f"labs_missingness_{split}.npy", mmap_mode="r")
+
+        assert len(self.cxr) == len(self.ecg) == len(self.labs_pct) == len(self.labs_miss)
+        self.N = len(self.cxr)
+
+    def __len__(self):
+        return self.N
+
+    def __getitem__(self, idx):
+        cxr = torch.from_numpy(self.cxr[idx]).float()      # or half
+        ecg = torch.from_numpy(self.ecg[idx]).float()
+        labs_pct = torch.from_numpy(self.labs_pct[idx]).float()
+        labs_miss = torch.from_numpy(self.labs_miss[idx]).float()
+        return cxr, ecg, labs_pct, labs_miss
+
 class SymileMIMICDataModule(pl.LightningDataModule):
-    """Lightning DataModule for Symile-MIMIC"""
-    def __init__(
-        self,
-        data_dir: str,
-        batch_size: int = 256,
-        num_workers: Optional[int] = None,
-    ):
+    def __init__(self, data_dir, batch_size=256, num_workers=None):
         super().__init__()
         self.data_dir = Path(data_dir)
         self.batch_size = batch_size
-        
         if num_workers is None:
             try:
                 self.num_workers = len(os.sched_getaffinity(0))
@@ -445,25 +461,13 @@ class SymileMIMICDataModule(pl.LightningDataModule):
         else:
             self.num_workers = num_workers
 
-    def setup(self, stage: Optional[str] = None):
-        if stage == "fit" or stage is None:
-            # Load training data
-            cxr_train = torch.load(self.data_dir / "train/cxr_train.pt")
-            ecg_train = torch.load(self.data_dir / "train/ecg_train.pt")
-            labs_pct_train = torch.load(self.data_dir / "train/labs_percentiles_train.pt")
-            labs_miss_train = torch.load(self.data_dir / "train/labs_missingness_train.pt")
-            
-            # Load validation data
-            cxr_val = torch.load(self.data_dir / "val/cxr_val.pt")
-            ecg_val = torch.load(self.data_dir / "val/ecg_val.pt")
-            labs_pct_val = torch.load(self.data_dir / "val/labs_percentiles_val.pt")
-            labs_miss_val = torch.load(self.data_dir / "val/labs_missingness_val.pt")
-            
-            self.ds_train = TensorDataset(cxr_train, ecg_train, labs_pct_train, labs_miss_train)
-            self.ds_val = TensorDataset(cxr_val, ecg_val, labs_pct_val, labs_miss_val)
-            
-            print(f"✓ Loaded {len(self.ds_train)} training samples")
-            print(f"✓ Loaded {len(self.ds_val)} validation samples")
+    def setup(self, stage=None):
+        if stage in ("fit", None):
+            self.ds_train = SymileMIMICDatasetV2(self.data_dir, "train")
+            self.ds_val   = SymileMIMICDatasetV2(self.data_dir, "val")
+
+        if stage in ("test", None):
+            self.ds_test  = SymileMIMICDatasetV2(self.data_dir, "test")
 
     def train_dataloader(self):
         return DataLoader(
@@ -473,7 +477,7 @@ class SymileMIMICDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             drop_last=True,
-            persistent_workers=True if self.num_workers > 0 else False,
+            persistent_workers=self.num_workers > 0,
         )
 
     def val_dataloader(self):
@@ -484,5 +488,319 @@ class SymileMIMICDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             drop_last=False,
-            persistent_workers=True if self.num_workers > 0 else False,
+            persistent_workers=self.num_workers > 0,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.ds_test,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=self.num_workers > 0,
+        )
+
+import os
+import torch
+import torch.nn as nn
+import numpy as np
+import torchvision.transforms as T
+import lightning.pytorch as pl
+from torch.utils.data import Dataset, DataLoader
+from pathlib import Path
+from typing import Optional, Callable
+import torch
+import torch.nn as nn
+import torchvision.transforms as T
+import torchvision.transforms.functional as TF
+from typing import Tuple
+import random
+import math
+
+
+class GammaCorrection(nn.Module):
+    """
+    Simulates X-ray exposure variations via gamma correction.
+    More realistic than linear brightness for radiographs.
+    """
+    def __init__(self, gamma_range: Tuple[float, float] = (0.8, 1.2)):
+        super().__init__()
+        self.gamma_range = gamma_range
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gamma = random.uniform(*self.gamma_range)
+        return x.clamp(min=1e-8).pow(gamma)
+
+
+class LocalContrastNoise(nn.Module):
+    """
+    Adds spatially-varying noise to simulate detector variations.
+    """
+    def __init__(self, noise_std: float = 0.02):
+        super().__init__()
+        self.noise_std = noise_std
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.noise_std > 0:
+            noise = torch.randn_like(x) * self.noise_std
+            x = x + noise
+        return x.clamp(0, 1)
+
+
+class GridDistortion(nn.Module):
+    """
+    Subtle elastic-like distortion via grid warping.
+    Simulates patient positioning variations and anatomical differences.
+    """
+    def __init__(self, distort_limit: float = 0.05, p: float = 0.3):
+        super().__init__()
+        self.distort_limit = distort_limit
+        self.p = p
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if random.random() > self.p:
+            return x
+        
+        # Simple implementation: small random affine as approximation
+        # For true elastic, use kornia.augmentation.RandomElasticTransform
+        angle = random.uniform(-2, 2)
+        scale = random.uniform(0.98, 1.02)
+        shear = random.uniform(-self.distort_limit * 10, self.distort_limit * 10)
+        
+        return TF.affine(
+            x, 
+            angle=angle, 
+            translate=[0, 0], 
+            scale=scale, 
+            shear=shear,
+            fill=0
+        )
+
+
+# ============================================================================
+# 1. Dataset with Transform Support
+# ============================================================================
+
+class SymileMIMICDatasetV2(Dataset):
+    def __init__(
+        self, 
+        data_dir: Path, 
+        split: str, 
+        transform: Optional[Callable] = None
+    ):
+        self.split = split
+        # Using mmap_mode="r" keeps memory usage low
+        self.cxr = np.load(data_dir / split / f"cxr_{split}.npy", mmap_mode="r")
+        self.ecg = np.load(data_dir / split / "ecg_features.npy", mmap_mode="r")
+        self.labs = np.load(data_dir / split / "labs_features.npy", mmap_mode="r")
+        
+        self.transform = transform
+        self.N = len(self.cxr)
+
+        assert len(self.cxr) == len(self.ecg) == len(self.labs)
+
+    def __len__(self):
+        return self.N
+
+    def __getitem__(self, idx):
+        # 1. Load data
+        # Note: Copying avoids stride issues with negative indexing in transforms
+        cxr_img = self.cxr[idx].copy() 
+        
+        # 2. Apply Transforms (Augmentation/Normalization)
+        if self.transform:
+            # Transforms usually expect Tensor [C, H, W] or PIL
+            # Assuming cxr_img is [C, H, W] or [H, W]. If [H,W], add channel dim.
+            cxr_tensor = torch.from_numpy(cxr_img).float()
+            if cxr_tensor.ndim == 2:
+                cxr_tensor = cxr_tensor.unsqueeze(0) # Add channel dim if missing
+            
+            cxr = self.transform(cxr_tensor)
+        else:
+            # Fallback if no transform provided
+            cxr = torch.from_numpy(cxr_img).float()
+
+        # 3. Load Features (Frozen embeddings)
+        ecg_features = torch.from_numpy(self.ecg[idx]).float()   # [1024]
+        labs_features = torch.from_numpy(self.labs[idx]).float() # [256]
+
+        return cxr, ecg_features, labs_features
+
+# ============================================================================
+# 2. DataModule with Regularization Transforms
+# ============================================================================
+class UnNormalize(nn.Module):
+    def __init__(self, mean, std):
+        super().__init__()
+        self.mean = torch.tensor(mean).view(3, 1, 1)
+        self.std = torch.tensor(std).view(3, 1, 1)
+
+    def forward(self, tensor):
+        # x = (x - mean) / std  <-- Original Normalization
+        # x * std + mean        <-- Undo
+        return tensor * self.std.to(tensor.device) + self.mean.to(tensor.device)
+
+class RobustTrainTransforms(nn.Module):
+    def __init__(self, img_size):
+        super().__init__()
+        self.mean = [0.485, 0.456, 0.406]
+        self.std = [0.229, 0.224, 0.225]
+        
+        # 1. The Fixers
+        self.un_norm = UnNormalize(self.mean, self.std)
+        self.re_norm = T.Normalize(self.mean, self.std)
+        
+        # 2. The Augmentations (Operate in [0, 1] space)
+        self.aug_pipeline = T.Compose([
+            # Strong Geometric Augmentation
+            T.RandomResizedCrop(
+                size=img_size,
+                scale=(0.75, 1.0),      # Safe for 10k regime
+                ratio=(0.85, 1.15),
+                antialias=True,
+            ),
+            
+            T.RandomApply([
+                T.RandomAffine(
+                    degrees=10, 
+                    translate=(0.1, 0.1),
+                    scale=(0.9, 1.1),
+                    fill=0,
+                )
+            ], p=0.6),
+
+            # Intensity Augmentation (Now mathematically valid)
+            T.RandomApply([
+                T.ColorJitter(
+                    brightness=0.2, 
+                    contrast=0.2, 
+                    saturation=0, 
+                    hue=0
+                )
+            ], p=0.3),
+
+            # Blur
+            T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=0.15),
+        ])
+        
+        # 3. Erasing (Best done after re-normalization)
+        self.eraser = T.RandomErasing(
+            p=0.25,
+            scale=(0.02, 0.1),
+            ratio=(0.3, 3.3),
+            value=0, # 0 is roughly mean in normalized space
+        )
+
+    def forward(self, x):
+        # x is Normalized Tensor (CheXpert Preprocessing)
+        
+        # 1. Un-Normalize -> [0, 1]
+        x = self.un_norm(x)
+        
+        # 2. Apply Augmentations
+        x = self.aug_pipeline(x)
+        
+        # 3. Re-Normalize -> Gaussian Distribution
+        x = self.re_norm(x)
+        
+        # 4. Random Erasing
+        x = self.eraser(x)
+        
+        return x
+
+class SymileMIMICDataModuleV2(pl.LightningDataModule):
+    def __init__(
+        self, 
+        data_dir: str, 
+        batch_size: int = 256, 
+        num_workers: Optional[int] = None,
+        img_size: int = 224,
+        use_data_aug = True,
+    ):
+        super().__init__()
+        self.data_dir = Path(data_dir)
+        self.batch_size = batch_size
+        self.img_size = img_size
+        self.use_data_aug = use_data_aug
+
+        if num_workers is None:
+            try:
+                self.num_workers = len(os.sched_getaffinity(0))
+            except AttributeError:
+                self.num_workers = 4
+        else:
+            self.num_workers = num_workers
+        self.mean = [0.485, 0.456, 0.406]
+        self.std = [0.229, 0.224, 0.225]
+        
+        # 2. The "Fixer" layers
+        self.un_norm = UnNormalize(self.mean, self.std)
+        self.re_norm = T.Normalize(self.mean, self.std)
+
+    def get_train_transforms(self):
+            # Returns the custom nn.Module class that handles the un-norm/re-norm sandwich
+            return RobustTrainTransforms(self.img_size)
+
+    def get_val_transforms(self):
+        """
+        Deterministic preprocessing for val/test.
+        From 320x320 -> 224x224 (no Normalize again).
+        """
+        return T.Compose([
+            T.Resize((self.img_size, self.img_size), antialias=True),
+        ])
+
+    def setup(self, stage=None):
+        if stage in ("fit", None):
+            self.ds_train = SymileMIMICDatasetV2(
+                self.data_dir, 
+                split="train", 
+                transform=self.get_train_transforms() if self.use_data_aug else self.get_val_transforms()
+            )
+            self.ds_val = SymileMIMICDatasetV2(
+                self.data_dir, 
+                split="val", 
+                transform=self.get_val_transforms()   # <--- Deterministic
+            )
+        
+        if stage in ("test", None):
+            self.ds_test = SymileMIMICDatasetV2(
+                self.data_dir, 
+                split="test", 
+                transform=self.get_val_transforms()   # <--- Deterministic
+            )
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.ds_train,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=True,
+            persistent_workers=self.num_workers > 0,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.ds_val,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=self.num_workers > 0,
+        )
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.ds_test,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=self.num_workers > 0,
         )

@@ -173,7 +173,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_nodes", type=int, default=1)
 
     # Backbone / mode
-    parser.add_argument("--mode", type=str, default="mae", choices=["mae", "imagenet"])
+    parser.add_argument("--mode", type=str, default="mae", choices=["mae", "imagenet", "pacx"])
     parser.add_argument("--backbone_name", type=str, default="vit_base_patch16_224")
     parser.add_argument("--ckpt_path", type=str, default="./checkpoints/mae/last.ckpt")
 

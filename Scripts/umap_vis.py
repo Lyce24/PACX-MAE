@@ -122,7 +122,7 @@ def main(args):
     # -------------------------
     encoder = CXRModel(
         num_classes=num_classes,
-        mode="mae",
+        mode=args.mode,
         backbone_name="vit_base_patch16_224",
         model_checkpoints=args.ckpt_path,
         unfreeze_backbone=False,
@@ -180,6 +180,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, default="COVIDQU")
+    parser.add_argument("--mode", type=str, default="mae")
     parser.add_argument("--train_csv", type=str, default="/users/kmaeda2/scratch/QUEx/covidqu_train_split.csv")
     parser.add_argument("--val_csv", type=str, default="/users/kmaeda2/scratch/QUEx/covidqu_val_split.csv")
     parser.add_argument("--test_csv", type=str, default="/users/kmaeda2/scratch/QUEx/covidqu_test_split.csv")

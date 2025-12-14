@@ -268,37 +268,25 @@ class CXRModel(nn.Module):
             print("Missing keys:", missing)
             print("Unexpected keys:", unexpected)
         elif self.mode == "pacx":
-            # Load the checkpoint
-            ckpt = torch.load(
-                self.model_checkpoints,
-                map_location="cpu",
-                weights_only=False
+            from peft import LoraConfig, get_peft_model
+            base = MAECXREncoder(embed_dim=768, depth=12, num_heads=12)
+            base.load_state_dict(torch.load("../../scratch/checkpoints/mae/last.ckpt", map_location="cpu"), strict=False)
+
+            lora_cfg = LoraConfig(
+                r=8, lora_alpha=16, lora_dropout=0.1,
+                target_modules=["qkv", "fc1", "fc2"],
+                bias="none",
             )
 
-            state = ckpt["state_dict"]
+            peft_model = get_peft_model(base, lora_cfg)
 
-            # ---- 1. Filter student CXR encoder keys ----
-            student_state = {k: v for k, v in state.items() if k.startswith("cxr_encoder.")}
+            ckpt = torch.load(self.model_checkpoints, map_location="cpu")
+            sd = ckpt["state_dict"]
+            enc_sd = {k.replace("cxr_encoder.", "", 1): v for k, v in sd.items() if k.startswith("cxr_encoder.")}
+            peft_model.load_state_dict(enc_sd, strict=False)
 
-            # ---- 2. Strip the "cxr_encoder." prefix ----
-            student_state_stripped = {}
-            for k, v in student_state.items():
-                new_key = k.replace("cxr_encoder.", "")   # CXREncoder expects keys without this prefix
-                student_state_stripped[new_key] = v
+            backbone = peft_model.merge_and_unload()
 
-            # ---- 3. Load NON-STRICT into MAECXREncoder ----
-            backbone = MAECXREncoder(
-                        patch_size=16,
-                        embed_dim=768,
-                        depth=12,
-                        num_heads=12,
-                        mlp_ratio=4,
-                        norm_layer=partial(nn.LayerNorm, eps=1e-6),
-                    )
-            
-            missing, unexpected = backbone.load_state_dict(student_state_stripped, strict=False)
-            print("Missing keys:", missing)
-            print("Unexpected keys:", unexpected)
         else:
             raise ValueError(f"Unknown model mode: {self.mode}. Supported modes are: imagenet, mae, mimic, pacx.")
         

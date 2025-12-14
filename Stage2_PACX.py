@@ -185,7 +185,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--save_dir", type=str, default="../../scratch/checkpoints/PACX-Physio")
     parser.add_argument("--ckpt_path", type=str, default=None, help="Skip training, test this ckpt")
-    parser.add_argument("--project_name", type=str, default="PACX-Physio-V4")
+    parser.add_argument("--project_name", type=str, default="PACX-Physio-V7")
 
     # --- Training Params ---
     parser.add_argument("--batch_size", type=int, default=128)

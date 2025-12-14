@@ -43,7 +43,7 @@ def main(args):
         num_classes = 1
         task_type = "binary"
     elif args.task == "chexchonet":
-        class_names = ["SLVH_DLV_Positive"]
+        class_names = ["composite_slvh_dlv"]
         num_classes = 1
         task_type = "binary"
     elif args.task == "COVIDQU":
@@ -198,7 +198,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", type=int, default=512)
-    parser.add_argument("--num_workers", type=int, default=16)
+    parser.add_argument("--num_workers", type=int, default=6)
     parser.add_argument("--image_size", type=int, default=224)
     parser.add_argument("--lr", type=float, default=3e-3) # 3e-3 for linear probing / 3e-4 for fine-tuning
     parser.add_argument("--weight_decay", type=float, default=0.01)

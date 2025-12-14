@@ -26,7 +26,6 @@ import math
 from typing import Optional, List
 import torch.nn as nn
 
-
 class ClassificationLightningModule(pl.LightningModule):
     def __init__(
         self,
@@ -41,7 +40,6 @@ class ClassificationLightningModule(pl.LightningModule):
         betas=(0.9, 0.95),
         class_names: Optional[List[str]] = None,
         backbone_name: str = "vit_base_patch16_224",
-        # NEW: choose between "multilabel" and "multiclass" when num_classes > 1
         task_type: str = "multilabel",
     ):
         """
@@ -53,7 +51,7 @@ class ClassificationLightningModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        assert task_type in {"multilabel", "multiclass"}
+        assert task_type in {"multilabel", "multiclass", "binary"}, f"Invalid task_type: {task_type}"
 
         self.num_classes = num_classes
 
@@ -206,9 +204,16 @@ class ClassificationLightningModule(pl.LightningModule):
 
         else:  # multiclass
             # logits [B,C], targets [B] or [B,1]
-            if targets.ndim == 2 and targets.size(-1) == 1:
-                targets = targets.view(-1)
-            targets = targets.long()              # class indices
+            if targets.ndim == 2:
+                if targets.size(-1) == 1:
+                    # shape [B, 1] with class indices -> flatten
+                    targets = targets.view(-1)
+                else:
+                    # shape [B, C] one-hot or probabilities -> take argmax
+                    # assume row-wise one-hot / soft labels
+                    targets = targets.argmax(dim=-1)
+            # else: already [B]
+            targets = targets.long()  # class indices [B]
 
             loss = self.criterion(logits, targets)
 

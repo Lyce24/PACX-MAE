@@ -74,7 +74,8 @@ class CLIPRegressionLoss(nn.Module):
         regression_weight: float = 0.1,
         temperature: float = 0.07,
         label_smoothing: float = 0.02,
-
+        use_ecg: bool = True,
+        use_labs: bool = True,
     ):
         super().__init__()
         self.clip_weight = clip_weight
@@ -82,6 +83,8 @@ class CLIPRegressionLoss(nn.Module):
         self.temperature = temperature
         self.label_smoothing=label_smoothing
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / temperature))
+        self.use_ecg = use_ecg
+        self.use_labs = use_labs
     
     def clip_loss(self, local_z, global_z, local_targets):
         """
@@ -114,40 +117,45 @@ class CLIPRegressionLoss(nn.Module):
         
         # ---- CLIP Losses (Symmetric Local->Global) ----
         # 1. CXR <-> ECG
-        loss_cxr_ecg = self.clip_loss(cxr_local, ecg_global, clip_targets)
-        loss_ecg_cxr = self.clip_loss(ecg_local, cxr_global, clip_targets)
-        clip_cxr_ecg = 0.5 * (loss_cxr_ecg + loss_ecg_cxr)
+        zero = cxr_local.new_tensor(0.0)
+        loss_dict: Dict[str, torch.Tensor] = {}
+        clip_terms: List[torch.Tensor] = []
 
-        # 2. CXR <-> Labs
-        loss_cxr_labs = self.clip_loss(cxr_local, labs_global, clip_targets)
-        loss_labs_cxr = self.clip_loss(labs_local, cxr_global, clip_targets)
-        clip_cxr_labs = 0.5 * (loss_cxr_labs + loss_labs_cxr)
-        
-        clip_total = 0.5 * (clip_cxr_ecg + clip_cxr_labs)
-        
-        # ---- Regression Losses (Local only) ----
-        # Regression does not need global context, as it's a direct MSE/Cosine between paired samples
-        reg_ecg = self.regression_loss(cxr_to_ecg_pred, ecg_target)
-        reg_labs = self.regression_loss(cxr_to_labs_pred, labs_target)
-        reg_total = (reg_ecg + reg_labs) / 2
-        
-        # ---- Total ----
-        total_loss = (
-            self.clip_weight * clip_total + 
-            self.regression_weight * reg_total
-        )
-        
-        loss_dict = {
-            "total": total_loss,
-            "clip_total": clip_total,
-            "clip_cxr_ecg": clip_cxr_ecg,
-            "clip_cxr_labs": clip_cxr_labs,
-            "reg_total": reg_total,
-            "reg_ecg": reg_ecg,
-            "reg_labs": reg_labs,
-            "logit_scale": self.logit_scale.exp()
-        }
-        
+        if self.use_ecg:
+            loss_cxr_ecg = self.clip_loss(cxr_local, ecg_global, clip_targets)
+            loss_ecg_cxr = self.clip_loss(ecg_local, cxr_global, clip_targets)
+            clip_cxr_ecg = 0.5 * (loss_cxr_ecg + loss_ecg_cxr)
+            loss_dict["clip_cxr_ecg"] = clip_cxr_ecg
+            clip_terms.append(clip_cxr_ecg)
+
+        if self.use_labs:
+            loss_cxr_labs = self.clip_loss(cxr_local, labs_global, clip_targets)
+            loss_labs_cxr = self.clip_loss(labs_local, cxr_global, clip_targets)
+            clip_cxr_labs = 0.5 * (loss_cxr_labs + loss_labs_cxr)
+            loss_dict["clip_cxr_labs"] = clip_cxr_labs
+            clip_terms.append(clip_cxr_labs)
+
+        clip_total = torch.stack(clip_terms).mean() if clip_terms else zero
+        loss_dict["clip_total"] = clip_total
+
+        reg_terms: List[torch.Tensor] = []
+        if self.use_ecg and cxr_to_ecg_pred is not None and ecg_target is not None:
+            reg_ecg = self.regression_loss(cxr_to_ecg_pred, ecg_target)
+            loss_dict["reg_ecg"] = reg_ecg
+            reg_terms.append(reg_ecg)
+
+        if self.use_labs and cxr_to_labs_pred is not None and labs_target is not None:
+            reg_labs = self.regression_loss(cxr_to_labs_pred, labs_target)
+            loss_dict["reg_labs"] = reg_labs
+            reg_terms.append(reg_labs)
+
+        reg_total = torch.stack(reg_terms).mean() if reg_terms else zero
+        loss_dict["reg_total"] = reg_total
+
+        total_loss = self.clip_weight * clip_total + self.regression_weight * reg_total
+        loss_dict["total"] = total_loss
+        loss_dict["logit_scale"] = self.logit_scale.exp()
+
         return total_loss, loss_dict
 
 
@@ -167,6 +175,7 @@ class CrossModalCXRDistillation(pl.LightningModule):
         self,
         # Encoders
         mae_checkpoint_path: str,
+        ablation: Optional[str], # None, "ecg", "labs"
 
         # Dimensions
         cxr_dim: int = 768,
@@ -214,6 +223,15 @@ class CrossModalCXRDistillation(pl.LightningModule):
 
         self._apply_tuning_strategy()
 
+        self.ablation = ablation
+        self.use_ecg = True
+        self.use_labs = True
+        if self.ablation:
+            if self.ablation == "ecg":
+                self.use_labs = False
+            elif self.ablation == "labs":
+                self.use_ecg = False
+
         # ---- Projection Heads for CLIP (all trainable, discarded at inference) ----
         self.cxr_to_shared = ProjectionHead(cxr_dim, shared_dim)
         self.ecg_to_shared = ProjectionHead(ecg_dim, shared_dim)
@@ -228,12 +246,16 @@ class CrossModalCXRDistillation(pl.LightningModule):
             clip_weight=clip_weight,
             regression_weight=regression_weight,
             temperature=temperature,
-            label_smoothing=label_smoothing
+            label_smoothing=label_smoothing,
+            ablation=self.ablation
         )
 
         self.val_cos_ecg = CosineSimilarity(reduction='mean')
         self.val_cos_labs = CosineSimilarity(reduction='mean')
         self.train_loss_tracker = MeanMetric()
+        self._val_ecg_updated = False
+        self._val_labs_updated = False
+
         
         self._print_model_info()
     
@@ -362,6 +384,8 @@ class CrossModalCXRDistillation(pl.LightningModule):
         """
         # ---- Encode CXR (trainable) ----
         cxr_emb = self.cxr_encoder(cxr)  # [B, 768]
+        labs_emb = labs_emb if self.use_labs else None
+        ecg_emb = ecg_emb if self.use_ecg else None
         
         outputs = {"cxr_emb": cxr_emb}
         
@@ -369,19 +393,21 @@ class CrossModalCXRDistillation(pl.LightningModule):
         outputs["cxr_shared"] = self.cxr_to_shared(cxr_emb)  # [B, shared_dim]
         
         # ---- Regression predictions ----
-        outputs["cxr_to_ecg_pred"] = self.cxr_to_ecg(cxr_emb)   # [B, ecg_dim]
-        outputs["cxr_to_labs_pred"] = self.cxr_to_labs(cxr_emb) # [B, labs_dim]
+        if self.use_ecg:
+            outputs["cxr_to_ecg_pred"] = self.cxr_to_ecg(cxr_emb)   # [B, ecg_dim]
+        if self.use_labs:
+            outputs["cxr_to_labs_pred"] = self.cxr_to_labs(cxr_emb) # [B, labs_dim]
         
         # ---- Encode ECG/Labs (frozen) ----
         # inference-safe: only compute these when provided
-        if ecg_emb is not None:
+        if self.use_ecg and ecg_emb is not None:
             if ecg_emb.ndim != 2 or ecg_emb.size(-1) != self.ecg_dim:
                 raise ValueError(f"ecg_emb must be [B,{self.ecg_dim}], got {tuple(ecg_emb.shape)}")
             ecg_emb = ecg_emb.detach()
             outputs["ecg_emb"] = ecg_emb
             outputs["ecg_shared"] = self.ecg_to_shared(ecg_emb)
 
-        if labs_emb is not None:
+        if self.use_labs and labs_emb is not None:
             if labs_emb.ndim != 2 or labs_emb.size(-1) != self.labs_dim:
                 raise ValueError(f"labs_emb must be [B,{self.labs_dim}], got {tuple(labs_emb.shape)}")
             labs_emb = labs_emb.detach()
@@ -393,8 +419,14 @@ class CrossModalCXRDistillation(pl.LightningModule):
     # -------------------------------------------------------------------------
     # Training & Validation Steps
     # -------------------------------------------------------------------------   
+
     def training_step(self, batch, batch_idx):
         cxr, ecg_emb, labs_emb = batch
+        if not self.use_ecg:
+            ecg_emb = None
+        if not self.use_labs:
+            labs_emb = None
+
         B = cxr.size(0)
 
         # Forward
@@ -402,13 +434,13 @@ class CrossModalCXRDistillation(pl.LightningModule):
         if self.trainer.world_size > 1:
             # all_gather returns [WorldSize, B, Dim] -> Flatten to [WorldSize*B, Dim]
             cxr_global = self.all_gather(outputs["cxr_shared"], sync_grads=True).flatten(0, 1)
-            ecg_global = self.all_gather(outputs["ecg_shared"], sync_grads=True).flatten(0, 1)
-            labs_global = self.all_gather(outputs["labs_shared"], sync_grads=True).flatten(0, 1)
+            ecg_global = self.all_gather(outputs["ecg_shared"], sync_grads=True).flatten(0, 1) if self.use_ecg else None
+            labs_global = self.all_gather(outputs["labs_shared"], sync_grads=True).flatten(0, 1) if self.use_labs else None
         else:
             # Single GPU fallback
             cxr_global = outputs["cxr_shared"]
-            ecg_global = outputs["ecg_shared"]
-            labs_global = outputs["labs_shared"]
+            ecg_global = outputs["ecg_shared"] if self.use_ecg else None
+            labs_global = outputs["labs_shared"] if self.use_labs else None
 
         targets = torch.arange(B, device=self.device) + (self.global_rank * B)
 
@@ -416,25 +448,27 @@ class CrossModalCXRDistillation(pl.LightningModule):
         loss, loss_dict = self.loss_module(
             # Local Queries
             cxr_local=outputs["cxr_shared"], 
-            ecg_local=outputs["ecg_shared"], 
-            labs_local=outputs["labs_shared"],
+            ecg_local=outputs.get("ecg_shared"), 
+            labs_local=outputs.get("labs_shared"),
             # Global Keys
             cxr_global=cxr_global,
             ecg_global=ecg_global,
             labs_global=labs_global,
             # Regression (always local)
-            cxr_to_ecg_pred=outputs["cxr_to_ecg_pred"],
-            cxr_to_labs_pred=outputs["cxr_to_labs_pred"],
-            ecg_target=outputs["ecg_emb"],
-            labs_target=outputs["labs_emb"],
+            cxr_to_ecg_pred=outputs.get("cxr_to_ecg_pred"),
+            cxr_to_labs_pred=outputs.get("cxr_to_labs_pred"),
+            ecg_target=outputs.get("ecg_emb"),
+            labs_target=outputs.get("labs_emb"),
             # Targets
             clip_targets=targets,
+            use_ecg=self.use_ecg,
+            use_labs=self.use_labs,
         )
         
-        N_ecg  = int(ecg_global.size(0))
-        N_labs = int(labs_global.size(0))
+        N_ecg  = int(ecg_global.size(0)) if self.use_ecg and ecg_global is not None else None
+        N_labs = int(labs_global.size(0)) if self.use_labs and labs_global is not None else None
         # total uses same candidate count; pick one (or average if you ever change it)
-        N_total = N_ecg
+        N_total = N_ecg if N_ecg else N_labs
 
         def _log_clip_adjusted(tag: str, loss_tensor: torch.Tensor, N: int):
             logN = loss_tensor.new_tensor(math.log(N))
@@ -447,8 +481,8 @@ class CrossModalCXRDistillation(pl.LightningModule):
             self.log(f"{tag}_logN", logN.detach(), batch_size=B, sync_dist=True)
 
         # --- Per-loss logging ---
-        _log_clip_adjusted("train/clip_cxr_ecg",  loss_dict["clip_cxr_ecg"],  N_ecg)
-        _log_clip_adjusted("train/clip_cxr_labs", loss_dict["clip_cxr_labs"], N_labs)
+        _log_clip_adjusted("train/clip_cxr_ecg",  loss_dict.get("clip_cxr_ecg"),  N_ecg)
+        _log_clip_adjusted("train/clip_cxr_labs", loss_dict.get("clip_cxr_labs"), N_labs)
         _log_clip_adjusted("train/clip_total",    loss_dict["clip_total"],    N_total)
 
         # Logging
@@ -462,6 +496,11 @@ class CrossModalCXRDistillation(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         cxr, ecg_emb, labs_emb = batch
+        if not self.use_ecg:
+            ecg_emb = None
+        if not self.use_labs:
+            labs_emb = None
+
         B = cxr.size(0)
 
         outputs = self(cxr, ecg_emb, labs_emb)
@@ -469,13 +508,13 @@ class CrossModalCXRDistillation(pl.LightningModule):
         if self.trainer.world_size > 1:
             # all_gather returns [WorldSize, B, Dim] -> Flatten to [WorldSize*B, Dim]
             cxr_global = self.all_gather(outputs["cxr_shared"], sync_grads=False).flatten(0, 1)
-            ecg_global = self.all_gather(outputs["ecg_shared"], sync_grads=False).flatten(0, 1)
-            labs_global = self.all_gather(outputs["labs_shared"], sync_grads=False).flatten(0, 1)
+            ecg_global = self.all_gather(outputs["ecg_shared"], sync_grads=False).flatten(0, 1) if self.use_ecg else None
+            labs_global = self.all_gather(outputs["labs_shared"], sync_grads=False).flatten(0, 1) if self.use_labs else None
         else:
             # Single GPU fallback
             cxr_global = outputs["cxr_shared"]
-            ecg_global = outputs["ecg_shared"]
-            labs_global = outputs["labs_shared"]
+            ecg_global = outputs.get("ecg_shared") if self.use_ecg else None
+            labs_global = outputs.get("labs_shared") if self.use_labs else None
 
         targets = torch.arange(B, device=self.device) + (self.global_rank * B)
 
@@ -483,28 +522,33 @@ class CrossModalCXRDistillation(pl.LightningModule):
         loss, loss_dict = self.loss_module(
             # Local Queries
             cxr_local=outputs["cxr_shared"], 
-            ecg_local=outputs["ecg_shared"], 
-            labs_local=outputs["labs_shared"],
+            ecg_local=outputs.get("ecg_shared"), 
+            labs_local=outputs.get("labs_shared"),
             # Global Keys
             cxr_global=cxr_global,
             ecg_global=ecg_global,
             labs_global=labs_global,
             # Regression (always local)
-            cxr_to_ecg_pred=outputs["cxr_to_ecg_pred"],
-            cxr_to_labs_pred=outputs["cxr_to_labs_pred"],
-            ecg_target=outputs["ecg_emb"],
-            labs_target=outputs["labs_emb"],
+            cxr_to_ecg_pred=outputs.get("cxr_to_ecg_pred"),
+            cxr_to_labs_pred=outputs.get("cxr_to_labs_pred"),
+            ecg_target=outputs.get("ecg_emb"),
+            labs_target=outputs.get("labs_emb"),
             # Targets
             clip_targets=targets,
+            use_ecg=self.use_ecg,
+            use_labs=self.use_labs,
         )
+
 
         with torch.no_grad():
             # ---- CLIP retrieval metrics (within-batch) ----
             cxr_norm = F.normalize(outputs["cxr_shared"], dim=-1, eps=1e-6)
+            targets = torch.arange(B, device=cxr_norm.device)
+
+            # TODO: Continue ablation work here
+
             ecg_norm = F.normalize(outputs["ecg_shared"], dim=-1, eps=1e-6)
             labs_norm = F.normalize(outputs["labs_shared"], dim=-1, eps=1e-6)
-
-            targets = torch.arange(B, device=cxr_norm.device)
 
             sim_cxr_ecg = cxr_norm @ ecg_norm.t()
             sim_cxr_labs = cxr_norm @ labs_norm.t()
@@ -546,10 +590,10 @@ class CrossModalCXRDistillation(pl.LightningModule):
 
             cxr_shared_std = outputs["cxr_shared"].std(dim=0).mean()
 
-        N_ecg  = int(ecg_global.size(0))
-        N_labs = int(labs_global.size(0))
+        N_ecg  = int(ecg_global.size(0)) if self.use_ecg and ecg_global is not None else None
+        N_labs = int(labs_global.size(0)) if self.use_labs and labs_global is not None else None
         # total uses same candidate count; pick one (or average if you ever change it)
-        N_total = N_ecg
+        N_total = N_ecg if N_ecg else N_labs
 
         def _log_clip_adjusted(tag: str, loss_tensor: torch.Tensor, N: int):
             logN = loss_tensor.new_tensor(math.log(N))
@@ -593,10 +637,15 @@ class CrossModalCXRDistillation(pl.LightningModule):
 
     def on_validation_epoch_end(self):
         # epoch-aggregated regression cosines
-        self.log("val/cosine_sim_ecg", self.val_cos_ecg.compute(), prog_bar=True, sync_dist=True)
-        self.log("val/cosine_sim_labs", self.val_cos_labs.compute(), prog_bar=True, sync_dist=True)
+        if self.use_ecg and self._val_ecg_updated:
+            self.log("val/cosine_sim_ecg", self.val_cos_ecg.compute(), prog_bar=True, sync_dist=True)
+        if self.use_labs and self._val_labs_updated:
+            self.log("val/cosine_sim_labs", self.val_cos_labs.compute(), prog_bar=True, sync_dist=True)
         self.val_cos_ecg.reset()
         self.val_cos_labs.reset()
+        # NOTE: May not be necessary to track these flags, but just in case
+        self._val_ecg_updated = False
+        self._val_labs_updated = False
 
     def configure_optimizers(self):
         """

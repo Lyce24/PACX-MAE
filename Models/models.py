@@ -270,7 +270,7 @@ class CXRModel(nn.Module):
         elif self.mode == "pacx":
             from peft import LoraConfig, get_peft_model
             base = MAECXREncoder(embed_dim=768, depth=12, num_heads=12)
-            base.load_state_dict(torch.load("../../scratch/checkpoints/mae/last.ckpt", map_location="cpu"), strict=False)
+            base.load_state_dict(torch.load("/users/mspancho/Downloads/Final_PACX_MAE.ckpt", map_location="cpu"), strict=False)
 
             lora_cfg = LoraConfig(
                 r=8, lora_alpha=16, lora_dropout=0.1,

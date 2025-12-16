@@ -74,6 +74,8 @@ def train_model(
     # Initialize Model with new LLRD args
     model = CrossModalCXRDistillation(
         mae_checkpoint_path=args.mae_checkpoint,
+        ablation=args.ablation,
+        # Modalities Dimensions
         cxr_dim=768,
         ecg_dim=1024,
         labs_dim=256,
@@ -192,6 +194,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=0.05)
+    parser.add_argument("--ablation", type=str, default=None, help="Modality to ablate: 'ecg' or 'labs'")
 
     # --- LLRD & Unfreezing ---
     parser.add_argument(

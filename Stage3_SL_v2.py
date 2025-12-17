@@ -97,6 +97,34 @@ def main(args):
         test_csv= "./src/vindr_test_split.csv"
         root_dir= "/users/yliu802/.cache/kagglehub/datasets/awsaf49/vinbigdata-512-image-dataset/versions/1/vinbigdata"
         wandb_project= "vindr_cxr_ssl_eval_final_v2"
+    elif args.task == "MEDMOD-PHYS":
+        class_names = [
+            "Acute and unspecified renal failure", "Acute cerebrovascular disease", "Acute myocardial infarction", "Cardiac dysrhythmias",
+            "Chronic kidney disease", "Chronic obstructive pulmonary disease and bronchiectasis", "Complications of surgical procedures or medical care",
+            "Conduction disorders", "Congestive heart failure; nonhypertensive", "Coronary atherosclerosis and other heart disease",
+            "Diabetes mellitus with complications", "Diabetes mellitus without complication", "Disorders of lipid metabolism",
+            "Essential hypertension", "Fluid and electrolyte disorders",
+            "Gastrointestinal hemorrhage", "Hypertension with complications and secondary hypertension",
+            "Other liver diseases", "Other lower respiratory disease", "Other upper respiratory disease",
+            "Pleurisy; pneumothorax; pulmonary collapse", "Pneumonia (except that caused by tuberculosis or sexually transmitted disease)", "Respiratory failure; insufficiency; arrest (adult)",
+            "Septicemia (except in labor)", "Shock"
+        ]
+        num_classes = len(class_names)
+        task_type = "multilabel"
+        train_csv = "./src/medmod/train/train.csv"
+        val_csv = "./src/medmod/val/val.csv"
+        test_csv = "./src/medmod/test/test.csv"
+        root_dir = "./src/medmod"
+        wandb_project = "medmod_phys_ssl_eval_final_v2"
+    elif args.task == "MEDMOD-MORT":
+        class_names = ["mortality_inunit","mortality","mortality_inhospital"]
+        num_classes = len(class_names)
+        task_type = "multilabel"
+        train_csv = "./src/medmod/train/train.csv"
+        val_csv = "./src/medmod/val/val.csv"
+        test_csv = "./src/medmod/test/test.csv"
+        root_dir = "./src/medmod"
+        wandb_project = "medmod_mort_ssl_eval_final_v2"
     else:
         raise ValueError(f"Unsupported task: {args.task}")
     

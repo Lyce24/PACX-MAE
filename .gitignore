@@ -37,4 +37,5 @@ output.txt
 *.egg-info
 .vscode/
 .env
+*.onnx
 output.txt

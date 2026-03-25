@@ -275,7 +275,7 @@ class CXRModel(nn.Module):
 
             from peft import LoraConfig, get_peft_model
             base = MAECXREncoder(embed_dim=768, depth=12, num_heads=12)
-            base.load_state_dict(torch.load(self.mae_path, map_location="cpu"), strict=False)
+            base.load_state_dict(torch.load(self.mae_path, map_location="cpu", weights_only=False), strict=False)
 
             lora_cfg = LoraConfig(
                 r=8, lora_alpha=16, lora_dropout=0.1,
@@ -285,7 +285,7 @@ class CXRModel(nn.Module):
 
             peft_model = get_peft_model(base, lora_cfg)
 
-            ckpt = torch.load(self.model_checkpoints, map_location="cpu")
+            ckpt = torch.load(self.model_checkpoints, map_location="cpu", weights_only=False)
             sd = ckpt["state_dict"]
             enc_sd = {k.replace("cxr_encoder.", "", 1): v for k, v in sd.items() if k.startswith("cxr_encoder.")}
             peft_model.load_state_dict(enc_sd, strict=False)

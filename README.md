@@ -4,6 +4,11 @@
 **Institution:** Department of Computer Science, Brown University  
 **Corresponding Author:** yancheng_liu@brown.edu
 
+[![arXiv](https://img.shields.io/badge/arXiv-2606.01537-b31b1b.svg)](https://arxiv.org/abs/2606.01537)
+[![DOI](https://img.shields.io/badge/DOI-10.48550%2FarXiv.2606.01537-blue.svg)](https://doi.org/10.48550/arXiv.2606.01537)
+
+📄 **Paper:** [PaCX-MAE: Physiology-Augmented Chest X-Ray Masked Autoencoder](https://arxiv.org/abs/2606.01537), accepted at the ICML 2026 3rd Workshop on Multi-modal Foundation Models and Large Language Models for Life Sciences (FM4LS).
+
 ## 🧬 Overview
 
 **PaCX-MAE** is a cross-modal distillation framework that injects physiological priors into chest X-ray (CXR) encoders while remaining strictly unimodal at inference. The model bridges the gap between multimodal training and unimodal deployment, allowing a vision encoder to infer physiological context (such as cardiac electrical activity or fluid status) from anatomical data alone.
@@ -137,6 +142,23 @@ Alternatively, install dependencies via `requirements.txt`:
 
 ```bash
 pip install -r ./Env/requirements.txt
+```
+
+## 📝 Citation
+
+If you find PaCX-MAE useful in your research, please cite:
+
+```bibtex
+@misc{liu2026pacxmaephysiologyaugmentedchestxray,
+      title={PaCX-MAE: Physiology-Augmented Chest X-Ray Masked Autoencoder},
+      author={Yancheng Liu and Kenichi Maeda and Manan Pancholy},
+      year={2026},
+      eprint={2606.01537},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      doi={10.48550/arXiv.2606.01537},
+      url={https://arxiv.org/abs/2606.01537},
+}
 ```
 
 ## 📬 Contact
